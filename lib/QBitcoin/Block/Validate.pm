@@ -82,6 +82,7 @@ sub validate {
     my $was_standard;
     my $was_slashing;
     my $can_consume = 1; # Can validator consume transaction fee? No if stake transaction has no inputs
+    my $was_burn;
     for (my $num = 0; $num < @{$block->transactions}; $num++) {
         my $transaction = $block->transactions->[$num];
         if ($tx_in_block{$transaction->hash}++) {
@@ -105,9 +106,21 @@ sub validate {
             if ($was_standard && !$config->{regtest}) {
                 return "Coinbase transaction " . $transaction->hash_str . " must not be after standard transaction $was_standard";
             }
+            if ($was_burn && !$config->{regtest}) {
+                return "Coinbase transaction " . $transaction->hash_str . " must not be after burn transaction $was_burn";
+            }
             if ($was_slashing && !$config->{regtest}) {
                 return "Coinbase transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
             }
+        }
+        elsif ($transaction->is_burn) {
+            if ($was_standard && !$config->{regtest}) {
+                return "Burn transaction " . $transaction->hash_str . " must not be after standard transaction $was_standard";
+            }
+            if ($was_slashing && !$config->{regtest}) {
+                return "Burn transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
+            }
+            $was_burn = $transaction->hash_str;
         }
         elsif ($transaction->is_slashing) {
             $fee += $transaction->fee;
