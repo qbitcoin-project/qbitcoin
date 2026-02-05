@@ -69,6 +69,7 @@ use constant QBITCOIN_CONST => {
     # not be a way to put megabytes into the blockchain for the fine of a few satoshi.
     SLASHING_BARRIER_STAKES => 4,
     SLASHING_BARRIER_MARGIN => 4,
+    QBT_BURN_VIRT_AGE       => 3600*24*365, # 1 year, to prevent reorg attacks on burn transactions after downgrade
     CONFIG_DIR              => "/etc",
     CONFIG_NAME             => "qbitcoin.conf",
     ZERO_HASH               => "\x00" x 32,
@@ -128,6 +129,7 @@ use constant TX_TYPES_CONST => {
     TX_TYPE_COINBASE => 3,
     TX_TYPE_TOKENS   => 4,
     TX_TYPE_SLASHING => 5,
+    TX_TYPE_BURN     => 6,
 };
 
 use constant CRYPT_ALGO => {
