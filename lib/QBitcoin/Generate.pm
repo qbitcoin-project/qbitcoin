@@ -413,7 +413,7 @@ sub build_stake_tx {
 sub _have_weight_tx {
     my ($prev_block, $timeslot) = @_;
     foreach my $tx (QBitcoin::Transaction->mempool_list()) {
-        return 1 if $tx->is_coinbase;
+        return 1 if $tx->is_coinbase || $tx->is_burn;
         next unless $tx->is_slashing && !grep { $_->{txo}->tx_out } @{$tx->in};
         return 1 if !$prev_block || $prev_block->slashing_weight_ok($tx, $timeslot);
     }
