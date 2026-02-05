@@ -59,11 +59,11 @@ sub choose_for_block {
     my %in_block; # hashes of selected transactions
     my @selected;
 
-    # Coinbase and slashing transactions go first: the block layout enforced by
-    # Block::Validate (stake, coinbase(s), slashing(s), standard); they are also
+    # Coinbase, burn and slashing transactions go first: the block layout enforced by
+    # Block::Validate (stake, coinbase(s), burn(s), slashing(s), standard); they are also
     # exempt from the min_fee limit there.
-    my @front    = sort { compare_tx() } grep {   $_->coins_created || $_->is_slashing  } @mempool;
-    my @standard =                       grep { !($_->coins_created || $_->is_slashing) } @mempool;
+    my @front    = sort { compare_tx() } grep {   $_->is_coinbase || $_->is_burn || $_->is_slashing  } @mempool;
+    my @standard =                       grep { !($_->is_coinbase || $_->is_burn || $_->is_slashing) } @mempool;
 
     foreach my $tx (@front) {
         if ($size + $tx->size > MAX_BLOCK_SIZE || $tx_in_block + 1 > MAX_TX_IN_BLOCK) {
@@ -353,10 +353,11 @@ sub _insert_rate {
 }
 
 sub compare_tx {
-    # coinbase first, then slashing, then standard: the block layout enforced by
-    # Block::Validate (stake, coinbase(s), slashing(s), standard)
+    # coinbase first, then burn, then slashing, then standard: the block layout enforced by
+    # Block::Validate (stake, coinbase(s), burn(s), slashing(s), standard)
     return
-        ( $a->coins_created ? 0 : $a->is_slashing ? 1 : 2 ) <=> ( $b->coins_created ? 0 : $b->is_slashing ? 1 : 2 ) ||
+        ( $a->is_coinbase ? 0 : $a->is_burn ? 1 : $a->is_slashing ? 2 : 3 ) <=>
+            ( $b->is_coinbase ? 0 : $b->is_burn ? 1 : $b->is_slashing ? 2 : 3 ) ||
         ( $a->up && $b->up ? (
             ($a->up->btc_block_height // 0) <=> ($b->up->btc_block_height // 0) ||
             ($a->up->btc_tx_num       // 0) <=> ($b->up->btc_tx_num       // 0) ||
