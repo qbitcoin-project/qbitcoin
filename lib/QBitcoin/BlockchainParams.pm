@@ -5,7 +5,8 @@ use feature 'state';
 
 use constant MAINNET => {
     GENESIS_HASH       => pack("H*", ""),
-    QBT_BURN_HASH      => pack("H*", "fe5205472fb87124923f4be64292ef289478b06d"), # 1QBitcoin1QBitcoin1QBitcoin1pSAg3e
+    QBT_LOCK_PUBKEY    => pack("H*", "03c3fe5cc51c8c1d6b04ec0fe00d3487863c0eec33ac6360095700868d66de19ff"),
+    QBT_LOCK_ADDR      => "1QBTC1vwR9mao3AUPAmRgkz7wmUnZxCkv2",
     ADDRESS_VER        => "\x80",
     DELEG_KEY_VER256   => "\x8d", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
     DELEG_KEY_VER160   => "\x8e", # delegation WIF: privkey + hash160(delegate pubkey), pre-quantum delegate key
@@ -29,7 +30,8 @@ use constant MAINNET => {
 };
 use constant TESTNET => {
     GENESIS_HASH       => pack("H*", ""),
-    QBT_BURN_HASH      => pack("H*", "fe5205472fb87124923f4be64292ef289478b06d"), # 1QBitcoin1QBitcoin1QBitcoin1pSAg3e
+    QBT_LOCK_PUBKEY    => pack("H*", "02943a59688f1eceb1d068f6ac0ff84c8f17b2c3714269aec2185422cd61b748b6"),
+    QBT_LOCK_ADDR      => "mqbtcT4awjiAjrxMyGNnbdusCdCpMkryxv",
     ADDRESS_VER        => "\xef",
     DELEG_KEY_VER256   => "\xf0", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
     DELEG_KEY_VER160   => "\xf1", # delegation WIF: privkey + hash160(delegate pubkey), pre-quantum delegate key
@@ -71,12 +73,7 @@ use constant COMMON_CONST => {
 use QBitcoin::Const;
 use QBitcoin::Script::OpCodes qw(:OPCODES);
 use QBitcoin::Config;
-
-sub QBT_BURN_SCRIPT() {
-    state $qbt_burn_script = OP_DUP . OP_HASH160 . pack("C", 20) . QBT_BURN_HASH() . OP_EQUALVERIFY . OP_CHECKSIG;
-}
-
-sub QBT_BURN_LEN() { state $qbt_burn_len = length(QBT_BURN_SCRIPT) }
+use QBitcoin::Crypto qw(hash160);
 
 BEGIN {
     no strict 'refs';
@@ -88,6 +85,12 @@ BEGIN {
     }
 };
 
+sub QBT_BURN_SCRIPT() { state $qbt_burn_script = pack("C", length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
+sub QBT_BURN_LEN()    { state $qbt_burn_len = length(QBT_BURN_SCRIPT) }
+sub QBT_LOCK_SCRIPT() {
+    state $qbt_lock_script = OP_DUP . OP_HASH160 . pack("C", 20) . hash160(QBT_LOCK_PUBKEY) . OP_EQUALVERIFY . OP_CHECKSIG;
+}
+
 use constant COMMON_CONST;
 
 use Exporter 'import';
@@ -96,6 +99,7 @@ our @EXPORT = (
     keys %{&COMMON_CONST},
     'QBT_BURN_SCRIPT',
     'QBT_BURN_LEN',
+    'QBT_LOCK_SCRIPT',
 );
 
 1;

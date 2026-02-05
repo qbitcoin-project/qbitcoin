@@ -80,6 +80,9 @@ sub self_weight {
                         }
                         $weight += $w;
                     }
+                    elsif ($transaction->is_burn) {
+                        $weight += $transaction->burn_weight($self->time);
+                    }
                     else {
                         last if $transaction->fee >= 0;
                         next;
