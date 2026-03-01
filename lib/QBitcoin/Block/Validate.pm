@@ -15,7 +15,7 @@ use QBitcoin::Config;
 use QBitcoin::BlockchainParams;
 use QBitcoin::ProtocolState qw(skip_scripts);
 use QBitcoin::CheckPoints qw(checkpoint_hash);
-use QBitcoin::ValueUpgraded qw(level_by_total);
+use QBitcoin::ValueUpgraded qw(level_by_total downgrade_value);
 use QBitcoin::Log;
 use QBitcoin::Transaction;
 use QBitcoin::Slashing;
@@ -42,7 +42,8 @@ sub validate {
     }
     if (!$block->prev_hash || $block->prev_hash eq ZERO_HASH) {
         if (!$config->{regtest}) {
-            $block->upgraded = 0; # Genesis block has no upgrades
+            $block->upgraded    = 0; # Genesis block has no upgrades
+            $block->downgraded  = 0; # Genesis block has no downgrades
             $block->reward_fund = 0;
             $block->size = sum0(map { $_->size } @{$block->transactions});
             $block->min_fee = 0;
@@ -77,7 +78,8 @@ sub validate {
     my $empty_tx = 0;
     my $low_fee_tx = 0;
     my $min_fee = min_fee($block->prev_block, $block_size);
-    my $upgraded = $block->prev_block ? $block->prev_block->upgraded // 0 : 0;
+    my $upgraded   = $block->prev_block ? $block->prev_block->upgraded   // 0 : 0;
+    my $downgraded = $block->prev_block ? $block->prev_block->downgraded // 0 : 0;
     my $min_block_fee;
     my $was_standard;
     my $was_slashing;
@@ -120,6 +122,9 @@ sub validate {
             if ($was_slashing && !$config->{regtest}) {
                 return "Burn transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
             }
+            my $btc_value = downgrade_value($transaction->fee, $upgraded);
+            $upgraded   -= $btc_value;
+            $downgraded += $btc_value;
             $was_burn = $transaction->hash_str;
         }
         elsif ($transaction->is_slashing) {
@@ -178,7 +183,8 @@ sub validate {
     }
     $stake_reward == $block_reward
         or return "Incorrect stake reward for block " . $block->height . ": $stake_reward, expected $block_reward";
-    $block->upgraded = $upgraded;
+    $block->upgraded   = $upgraded;
+    $block->downgraded = $downgraded;
     my $static_reward = $block_reward ? (ref $block)->static_reward($block->prev_block, $block->time) : 0;
     $block->reward_fund = $block->prev_block ? $block->prev_block->reward_fund + $fee + $static_reward - $block_reward : 0;
     $block->size = $block_size;
