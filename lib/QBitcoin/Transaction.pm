@@ -25,6 +25,7 @@ use QBitcoin::ProtocolState qw(skip_scripts blockchain_synced);
 use QBitcoin::Generate::Control;
 use QBitcoin::Coins;
 use Bitcoin::Serialized;
+use Bitcoin::Address qw(is_btc_address);
 
 use Role::Tiny::With;
 with 'QBitcoin::Transaction::Tokens';
@@ -755,6 +756,14 @@ sub output_as_hashref {
         value   => $value / DENOMINATOR,
         address => $out->address,
     };
+    # If this output is to the qbt_burn address and the data field contains a
+    # valid Bitcoin address string (P2PKH, P2SH, P2WPKH, P2WSH, P2TR …),
+    # replace address/data with the Bitcoin address so decoderawtransaction
+    # mirrors what createrawtransaction accepted.
+    if (($out->scripthash // "") eq QBT_BURN_SCRIPTHASH && is_btc_address($out->data // "")) {
+        $res->{address} = $out->data;
+        delete $res->{data};
+    }
     if ($self->is_tokens) {
         $res = { %$res, %{$self->token_output_as_hashref($out)} };
     }
