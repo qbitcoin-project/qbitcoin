@@ -292,6 +292,7 @@ Result (for verbosity = 1):
   "size" : n,                     (numeric) The block size
   "weight" : n,                   (numeric) The block weight
   "height" : n,                   (numeric) The block height or index
+  "upgraded" : n,                 (numeric) Cumulative BTC satoshis converted to QBTC (net)
   "merkleroot" : "hex",           (string) The merkle root
   "tx" : [                        (json array) The transaction ids
     "hex",                        (string) The transaction id
@@ -339,6 +340,7 @@ sub cmd_getblock {
         merkleroot        => unpack("H*", $block->merkle_root),
         weight            => $block->weight,
         confirm_weight    => $best_block->weight - $block->weight,
+        upgraded          => $block->upgraded,
     };
     if ($verbosity == 1) {
         $res->{tx} = [ map { unpack("H*", $_) } @{$block->tx_hashes} ];
