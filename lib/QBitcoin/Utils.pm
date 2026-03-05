@@ -25,14 +25,17 @@ our @EXPORT_OK = qw(
 use List::Util qw(sum0);
 use QBitcoin::Log;
 use QBitcoin::Const;
+use QBitcoin::BlockchainParams;
 use QBitcoin::ORM qw(dbh DEBUG_ORM);
 use QBitcoin::Address qw(scripthash_by_address);
+use QBitcoin::Crypto qw(hash160);
 use QBitcoin::RedeemScript;
 use QBitcoin::TXO;
 use QBitcoin::Transaction;
 use QBitcoin::Block;
 use QBitcoin::MinFee qw(MIN_FEE);
 use QBitcoin::ProtocolState qw(blockchain_synced mempool_synced);
+use Bitcoin::Address qw(is_btc_address);
 
 use constant MAX_TXO_PER_ADDRESS => 10_000;
 
@@ -946,6 +949,21 @@ sub create_txo {
             length($out->{$key})
                 or return undef;
             $data = TXO_DATA_TAG . $out->{$key};
+        }
+        elsif (is_btc_address($key)) {
+            # Bitcoin address as destination: create an output to the freeze1 address
+            # (QBT_BURN_SCRIPT) with the Bitcoin address string stored verbatim in the
+            # data field (ASCII bytes).  Supports P2PKH, P2SH, P2WPKH, P2WSH, P2TR.
+            # The downgrade service reads the address string from data directly and
+            # releases the corresponding BTC to that address.
+            my $value = $out->{$key};
+            $value =~ /^[0-9]+$/ && $value <= MAX_VALUE
+                or return undef;
+            push @txo, {
+                scripthash => hash160(QBT_BURN_SCRIPT),
+                value      => $value,
+                data       => $key,
+            };
         }
         elsif (my $scripthash = eval { scripthash_by_address($key) }) {
             $out->{$key} =~ /^[0-9]+$/ && $out->{$key} <= MAX_VALUE
