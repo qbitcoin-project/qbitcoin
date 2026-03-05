@@ -12,6 +12,7 @@ use QBitcoin::BlockchainParams;
 use QBitcoin::Address qw(wif_to_pk pubkeyhash_by_str);
 use QBitcoin::Password;
 use QBitcoin::Accessors qw(mk_accessors);
+use Bitcoin::Address qw(is_btc_address);
 
 mk_accessors(qw(validate_message));
 
@@ -114,6 +115,10 @@ sub validate_boolean {
 
 sub validate_address {
     $_[0] =~ ADDRESS_RE;
+}
+
+sub validate_btc_address {
+    return is_btc_address($_[0]);
 }
 
 sub is_amount {
@@ -222,7 +227,7 @@ sub validate_outputs {
                 $data_count++;
                 next;
             }
-            elsif (validate_address($key)) {
+            elsif (validate_address($key) || validate_btc_address($key)) {
                 (defined($out->{$key}) && !ref($out->{$key}) && is_amount($out->{$key}))
                     or return 0;
                 $out->{$key} = int($out->{$key} * DENOMINATOR + 0.5);
