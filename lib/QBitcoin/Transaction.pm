@@ -30,6 +30,11 @@ use Role::Tiny::With;
 with 'QBitcoin::Transaction::Tokens';
 with 'QBitcoin::Transaction::Signature';
 
+# Scripthash of the qbt_burn address (QBT_BURN_SCRIPT), precomputed once.
+# Outputs to this scripthash whose data field contains a valid Bitcoin address
+# string (ASCII) are downgrade requests; the address is shown by decoderawtransaction.
+use constant QBT_BURN_SCRIPTHASH => hash160(QBT_BURN_SCRIPT);
+
 use constant FIELDS => {
     id           => NUMERIC, # db primary key for reference links
     hash         => BINARY,
@@ -1166,6 +1171,11 @@ sub validate {
                     $self->hash_str, $txo->tx_in_str, $txo->num);
                 return -1;
             }
+        }
+        elsif (($txo->scripthash // "") eq QBT_BURN_SCRIPTHASH) {
+            Warningf("Non-burn transaction %s attempts to spend qbt_burn output %s:%u",
+                $self->hash_str, $txo->tx_in_str, $txo->num);
+            return -1;
         }
     }
     if ($self->is_stake) {
