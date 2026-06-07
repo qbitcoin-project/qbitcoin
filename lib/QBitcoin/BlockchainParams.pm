@@ -69,6 +69,10 @@ use constant COMMON_CONST => {
     STATIC_REWARD      => 20_000_000, # 0.2 QBTC/block after upgrade finished
     REWARD_HALVING     => 10_000_000, # blocks, halving every ~ 3 years and emit 4M QBTC total as block rewards
     STAKE_MATURITY     => 12*3600,    # 12 hours
+    # Encoded for OP_CSV: number of BLOCK_INTERVAL(=10s) units OR'd with the QBitcoin
+    # time-type flag (1<<27), so the lock is by time, not by block count (qbtc skips
+    # empty blocks). See CSV handling in QBitcoin::Script.
+    DOWNGRADE_FREEZE_CSV => int(DOWNGRADE_FREEZE_SEC/10) | (1<<27),
 };
 
 use QBitcoin::Const;
@@ -90,6 +94,40 @@ sub QBT_BURN_SCRIPT() { state $qbt_burn_script = pack("C", length(QBT_LOCK_PUBKE
 sub QBT_BURN_LEN()    { state $qbt_burn_len = length(QBT_BURN_SCRIPT) }
 sub QBT_LOCK_SCRIPT() {
     state $qbt_lock_script = OP_DUP . OP_HASH160 . pack("C", 20) . hash160(QBT_LOCK_PUBKEY) . OP_EQUALVERIFY . OP_CHECKSIG;
+}
+
+# Trustless-downgrade deposit (freeze) script. One constant address for all users;
+# per-user data = [hash160(user_pubkey) (20)][btc_address ASCII] (EC variant).
+#   OP_IF   <TX_TYPE_BURN=5> OP_TX_TYPE OP_EQUALVERIFY <QBT_LOCK_PUBKEY> OP_CHECKSIG
+#   OP_ELSE <CSV 48h> OP_CSV OP_DROP
+#           OP_OUTPUTDATA <0> <20> OP_SUBSTR     ; user_hash160 = data[0..19]
+#           OP_OVER OP_HASH160 OP_EQUALVERIFY OP_CHECKSIG
+#   OP_ENDIF
+# System can spend it only inside a TX_TYPE_BURN (which carries the SPV proof of
+# the BTC HTLC); otherwise, after the timeout, the user reclaims their QBTC.
+sub QBT_FREEZE_SCRIPT() {
+    state $qbt_freeze_script =
+        OP_IF .
+        OP_5 . OP_TX_TYPE . OP_EQUALVERIFY .
+        chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG .
+        OP_ELSE .
+        chr(4) . pack("V", DOWNGRADE_FREEZE_CSV) . OP_CSV . OP_DROP .
+        OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr(20) . OP_SUBSTR .
+        OP_OVER . OP_HASH160 . OP_EQUALVERIFY . OP_CHECKSIG .
+        OP_ENDIF;
+};
+
+# Post-quantum variant: data = [hash256(user_pubkey) (32)][btc_address ASCII].
+sub QBT_FREEZE_PQ_SCRIPT() {
+    state $qbt_freeze_pq_script =
+        OP_IF .
+        OP_5 . OP_TX_TYPE . OP_EQUALVERIFY .
+        chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG .
+        OP_ELSE .
+        chr(4) . pack("V", DOWNGRADE_FREEZE_CSV) . OP_CSV . OP_DROP .
+        OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr(32) . OP_SUBSTR .
+        OP_OVER . OP_HASH256 . OP_EQUALVERIFY . OP_CHECKSIG .
+        OP_ENDIF;
 }
 
 use constant COMMON_CONST;
