@@ -1,16 +1,18 @@
 package QBitcoin::ValueUpgraded;
 use warnings;
 use strict;
+use feature 'state';
 
 use QBitcoin::Config;
 use QBitcoin::Log;
 use QBitcoin::Accessors qw(mk_accessors new);
 use QBitcoin::Const;
+use QBitcoin::BlockchainParams;
 use QBitcoin::ORM qw(find create :types);
 use QBitcoin::ValueUpgraded::PriceByLevel qw(@price_by_level);
 
 use Exporter qw(import);
-our @EXPORT_OK = qw(level_by_total upgrade_value downgrade_value);
+our @EXPORT_OK = qw(level_by_total upgrade_value downgrade_value downgrade_net);
 
 use constant TABLE => 'value_upgraded';
 
@@ -62,6 +64,17 @@ sub downgrade_value {
         $btc_value = $upgraded if $btc_value > $upgraded;
     }
     return $btc_value;
+}
+
+# BTC value actually released to the user after the downgrade service fee.
+# Mirrors coinbase_value() on the upgrade side (which applies UPGRADE_FEE).
+# NB: downgrade_value() above stays fee-free — it is used for upgrade-level
+# accounting; the fee only reduces what the user receives.
+sub downgrade_net {
+    my ($value) = @_;
+    state $permil = 1000 - int(DOWNGRADE_FEE * 1000);
+    use integer;
+    return $value * $permil / 1000;
 }
 
 1;
