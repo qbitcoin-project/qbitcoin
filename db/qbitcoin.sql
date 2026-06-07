@@ -68,6 +68,14 @@ CREATE TABLE `slashing` (
   FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
 );
 
+-- Reverse pointer for downgrades: maps a burn transaction to the Bitcoin
+-- transaction that released the corresponding BTC (see QBitcoin::Burn).
+CREATE TABLE `burn_txid` (
+  tx_id    integer    NOT NULL PRIMARY KEY,
+  btc_txid binary(32) NOT NULL,
+  FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
+);
+
 CREATE TABLE `tag` (
   id integer NOT NULL AUTO_INCREMENT PRIMARY KEY,
   tag varchar(64) NOT NULL UNIQUE
