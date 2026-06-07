@@ -62,9 +62,8 @@ use constant OPCODES => {
     OP_TUCK                => 0x7d, # +
 
     OP_TX_TYPE             => 0x7e, # push current transaction type onto the stack
-
-    OP_SUCCESS7f           => 0x7f, # + ex: disabled OP_SPLIT, OP_SUBSTR
-    OP_SUCCESS80           => 0x80, # + ex: disabled OP_NUM2BIN, OP_LEFT
+    OP_SUBSTR              => 0x7f, # (str begin size -> substr(str, begin, size)); ex: disabled OP_SPLIT/OP_SUBSTR
+    OP_OUTPUTDATA          => 0x80, # push the data field of the currently spent TXO; ex: disabled OP_NUM2BIN/OP_LEFT
     OP_SUCCESS81           => 0x81, # + ex: disabled OP_BIN2NUM, OP_RIGHT
     OP_SIZE                => 0x82, # +
 
@@ -115,7 +114,9 @@ use constant OPCODES => {
     OP_CHECKMULTISIGVERIFY => 0xaf, # +
 
     OP_CHECKLOCKTIMEVERIFY => 0xb1, # + previously OP_NOP2
+    OP_CLTV                => 0xb1, # alias for OP_CHECKLOCKTIMEVERIFY
     OP_CHECKSEQUENCEVERIFY => 0xb2, # + previously OP_NOP3
+    OP_CSV                 => 0xb2, # alias for OP_CHECKSEQUENCEVERIFY
 
     OP_MASTVERIFY          => 0xb3, # + previously OP_NOP4
     OP_EXEC                => 0xb4, # + previously OP_NOP5
