@@ -506,6 +506,31 @@ sub cmd_outputsvalue($) {
     return undef;
 }
 
+# OP_OUTPUTDATA: push the data field of the TXO currently being spent. The
+# freeze script stores [user_hash160][btc_address] there; the ELSE branch reads
+# it back to authorise the user reclaim without baking the key into the script.
+sub cmd_outputdata($) {
+    my ($state) = @_;
+    return unless $state->ifstate;
+    push @{$state->stack}, $state->tx->in->[$state->input_num]{txo}->data // "";
+    return undef;
+}
+
+# OP_SUBSTR: (str begin size -> substr(str, begin, size)). begin/size are script
+# integers; both must be non-negative and the range must lie within the string.
+sub cmd_substr($) {
+    my ($state) = @_;
+    return unless $state->ifstate;
+    my $stack = $state->stack;
+    @$stack >= 3 or return 0;
+    my $size  = unpack_int(pop @$stack) // return 0;
+    my $begin = unpack_int(pop @$stack) // return 0;
+    my $str   = pop @$stack;
+    $begin >= 0 && $size >= 0 && $begin + $size <= length($str) or return 0;
+    push @$stack, substr($str, $begin, $size);
+    return undef;
+}
+
 sub cmd_exec {
     my ($state) = @_;
     return unless $state->ifstate;
