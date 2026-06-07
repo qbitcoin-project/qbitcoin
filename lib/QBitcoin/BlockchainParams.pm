@@ -65,6 +65,7 @@ use constant COMMON_CONST => {
     UPGRADE_FEE        => 0.01, # 1%
     UPGRADE_MAX_BLOCKS => 1400000, # middle 2036
     UPGRADE_MAX_VALUE  => 10_500_000 * 100_000_000, # 10.5M BTC - stop conversion when upgraded reaches this
+    DOWNGRADE_FEE      => 0.01,       # 1%, taken by the downgrade service; covers the BTC network fee, the rest is its income
     STATIC_REWARD      => 20_000_000, # 0.2 QBTC/block after upgrade finished
     REWARD_HALVING     => 10_000_000, # blocks, halving every ~ 3 years and emit 4M QBTC total as block rewards
     STAKE_MATURITY     => 12*3600,    # 12 hours
