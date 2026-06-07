@@ -20,6 +20,7 @@ use QBitcoin::Delegation;
 use QBitcoin::Coinbase;
 use QBitcoin::Slashing;
 use QBitcoin::Slashing::Stored;
+use QBitcoin::Burn;
 use QBitcoin::ValueUpgraded qw(level_by_total);
 use QBitcoin::ConnectionList;
 use QBitcoin::Notify;
@@ -68,6 +69,7 @@ use constant ATTR => qw(
     upgrade_level
     token_hash
     slashing
+    btc_txid
 );
 
 mk_accessors(keys %{&FIELDS}, ATTR);
@@ -532,6 +534,9 @@ sub store {
             %{$self->slashing->stored_fields},
         });
     }
+    elsif ($self->is_burn) {
+        QBitcoin::Burn->create({ tx_id => $self->id, btc_txid => $self->btc_txid });
+    }
     foreach my $in (@{$self->in}) {
         $in->{txo}->store_spend($self),
     }
@@ -555,6 +560,7 @@ sub serialize {
 
     my $data = pack("c", $self->tx_type);
     $data .= $self->slashing->serialize if $self->is_slashing && $self->slashing; # equivocation evidence
+    $data .= $self->btc_txid if $self->is_burn; # 32-byte reverse pointer to the BTC release tx
     $data .= varstr($self->token_hash // "") if $self->is_tokens;
     $data .= varint(scalar @{$self->in});
     # Slashing inputs spend the equivocated UTXOs without a signature, so they carry an
@@ -578,6 +584,7 @@ sub serialize_unsigned {
 
     my $data = pack("c", $self->tx_type);
     $data .= $self->slashing->serialize if $self->is_slashing && $self->slashing; # equivocation evidence
+    $data .= $self->btc_txid if $self->is_burn; # 32-byte reverse pointer to the BTC release tx
     $data .= varstr($self->token_hash // "") if $self->is_tokens;
     $data .= varint(scalar @{$self->in});
     if ($self->in_raw) {
@@ -631,6 +638,7 @@ sub sign_hash {
     return $$cached_hash if defined($$cached_hash);
 
     my $data = pack("C", $self->tx_type);
+    $data .= $self->btc_txid if $self->is_burn; # 32-byte reverse pointer to the BTC release tx
     my $anyonecanpay = $sighash_type & SIGHASH_ANYONECANPAY;
     $sighash_type &= ~SIGHASH_ANYONECANPAY;
     my $sha;
@@ -697,6 +705,7 @@ sub as_hashref {
     $res->{coins_created} = $self->coins_created / DENOMINATOR if !UPGRADE_POW && defined $self->coins_created;
     $res->{time} = $self->received_time if defined $self->received_time;
     $res->{token_id} = unpack("H*", $self->token_hash // "") if $self->is_tokens;
+    $res->{btc_txid} = unpack("H*", $self->btc_txid) if $self->is_burn && defined $self->btc_txid;
     return $res;
 }
 
@@ -856,6 +865,8 @@ sub deserialize {
     if ($tx_type == TX_TYPE_SLASHING) {
         $slashing = QBitcoin::Slashing->deserialize($data) // return undef;
     }
+    my $btc_txid;
+    $btc_txid = $data->get(32) // return undef if $tx_type == TX_TYPE_BURN;
     my $token_hash;
     $token_hash = $data->get_string() if $tx_type == TX_TYPE_TOKENS;
     my $inputs = $data->get_varint // return undef;
@@ -899,6 +910,7 @@ sub deserialize {
         tx_type       => $tx_type,
         $tx_type == TX_TYPE_TOKENS ? ( token_hash => $token_hash ) : (),
         $slashing ? ( slashing => $slashing ) : (),
+        $tx_type == TX_TYPE_BURN   ? ( btc_txid   => $btc_txid   ) : (),
         hash          => $hash,
         size          => $end_index - $start_index,
         received_time => time(),
@@ -1511,14 +1523,6 @@ sub pre_load {
             }
             $attr->{in} = \@inputs;
         }
-        if ($attr->{tx_type} == TX_TYPE_SLASHING) {
-            my ($s) = QBitcoin::Slashing::Stored->find(tx_id => $attr->{id});
-            if (!$s) {
-                Errf("No evidence for slashing transaction %s", unpack("H*", $attr->{hash}));
-                die "No evidence for slashing transaction " . unpack("H*", $attr->{hash}) . "\n";
-            }
-            $attr->{slashing} = QBitcoin::Slashing->from_row($s);
-        }
         if ($attr->{tx_type} == TX_TYPE_TOKENS) {
             my $token_hash;
             if ($attr->{token_id} ) {
@@ -1536,6 +1540,22 @@ sub pre_load {
             foreach my $out (@{$attr->{out}}) {
                 $out->token_hash = $token_hash;
             }
+        }
+        elsif ($attr->{tx_type} == TX_TYPE_SLASHING) {
+            my ($s) = QBitcoin::Slashing::Stored->find(tx_id => $attr->{id});
+            if (!$s) {
+                Errf("No evidence for slashing transaction %s", unpack("H*", $attr->{hash}));
+                die "No evidence for slashing transaction " . unpack("H*", $attr->{hash}) . "\n";
+            }
+            $attr->{slashing} = QBitcoin::Slashing->from_row($s);
+        }
+        elsif ($attr->{tx_type} == TX_TYPE_BURN) {
+            my ($burn) = QBitcoin::Burn->fetch(tx_id => $attr->{id});
+            if (!$burn) {
+                Errf("No burn_txid reference for burn transaction %s", unpack("H*", $attr->{hash}));
+                die "No burn_txid reference for burn transaction " . unpack("H*", $attr->{hash}) . "\n";
+            }
+            $attr->{btc_txid} = $burn->{btc_txid};
         }
     }
     return $attr;
