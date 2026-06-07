@@ -61,6 +61,8 @@ use constant QBITCOIN_CONST => {
     # equivocation buried deeper can no longer be profitably slashed anyway.
     SLASHING_WINDOW         => 6 + 100, # INCORE_LEVELS + FORCE_BLOCKS
     QBT_BURN_VIRT_AGE       => 3600*24*365, # 1 year, to prevent reorg attacks on burn transactions after downgrade
+    # Trustless downgrade: relative time-lock for the user-reclaim path (48h).
+    DOWNGRADE_FREEZE_SEC    => 48*3600,
     CONFIG_DIR              => "/etc",
     CONFIG_NAME             => "qbitcoin.conf",
     ZERO_HASH               => "\x00" x 32,
