@@ -18,7 +18,8 @@ use QBitcoin::TXO;
 use QBitcoin::Coinbase;
 use QBitcoin::Slashing;
 use QBitcoin::Slashing::Stored;
-use QBitcoin::Burn;
+use QBitcoin::Downgrade;
+use QBitcoin::DowngradeData;
 use QBitcoin::ValueUpgraded qw(level_by_total);
 use QBitcoin::ConnectionList;
 use QBitcoin::Notify;
@@ -67,7 +68,7 @@ use constant ATTR => qw(
     upgrade_level
     token_hash
     slashing
-    btc_txid
+    down
 );
 
 mk_accessors(keys %{&FIELDS}, ATTR);
@@ -519,8 +520,8 @@ sub store {
             %{$self->slashing->stored_fields},
         });
     }
-    elsif ($self->is_burn) {
-        QBitcoin::Burn->create({ tx_id => $self->id, btc_txid => $self->btc_txid });
+    elsif (($self->is_downgrade || $self->is_burn) && $self->down) {
+        QBitcoin::DowngradeData->create({ tx_id => $self->id, payload => $self->down_payload });
     }
     foreach my $in (@{$self->in}) {
         $in->{txo}->store_spend($self),
@@ -544,7 +545,7 @@ sub serialize {
 
     my $data = pack("c", $self->tx_type);
     $data .= $self->slashing->serialize if $self->is_slashing && $self->slashing; # equivocation evidence
-    $data .= $self->btc_txid if $self->is_burn; # 32-byte reverse pointer to the BTC release tx
+    $data .= $self->down_payload; # downgrade commitment / burn SPV proof
     $data .= varstr($self->token_hash // "") if $self->is_tokens;
     $data .= varint(scalar @{$self->in});
     # Slashing inputs spend the equivocated UTXOs without a signature, so they carry an
@@ -568,7 +569,7 @@ sub serialize_unsigned {
 
     my $data = pack("c", $self->tx_type);
     $data .= $self->slashing->serialize if $self->is_slashing && $self->slashing; # equivocation evidence
-    $data .= $self->btc_txid if $self->is_burn; # 32-byte reverse pointer to the BTC release tx
+    $data .= $self->down_payload; # downgrade commitment / burn SPV proof
     $data .= varstr($self->token_hash // "") if $self->is_tokens;
     $data .= varint(scalar @{$self->in});
     if ($self->in_raw) {
@@ -591,7 +592,7 @@ sub sign_data {
     my $cached_data = $per_input ?  \$self->{sign_data}->[$sighash_type]->[$input_num] : \$self->{sign_data}->[$sighash_type];
     if (!defined($data = $$cached_data)) {
         $data = pack("C", $self->tx_type);
-        $data .= $self->btc_txid if $self->is_burn; # 32-byte reverse pointer to the BTC release tx
+        $data .= $self->down_payload; # downgrade commitment / burn SPV proof
         if ($sighash_type & SIGHASH_ANYONECANPAY) {
             # Only the current input is signed, not all inputs
             $data .= serialize_input_for_sign($self->in->[$input_num]);
@@ -646,7 +647,16 @@ sub as_hashref {
     $res->{coins_created} = $self->coins_created / DENOMINATOR if !UPGRADE_POW && defined $self->coins_created;
     $res->{time} = $self->received_time if defined $self->received_time;
     $res->{token_id} = unpack("H*", $self->token_hash // "") if $self->is_tokens;
-    $res->{btc_txid} = unpack("H*", $self->btc_txid) if $self->is_burn && defined $self->btc_txid;
+    if ($self->is_downgrade && $self->down) {
+        $res->{btc_txid}      = unpack("H*", scalar reverse $self->down->btc_txid);
+        $res->{btc_vout}      = $self->down->btc_vout + 0;
+        $res->{btc_value}     = $self->down->btc_value + 0;
+        $res->{btc_scriptpubkey} = unpack("H*", $self->down->scriptpubkey);
+    }
+    elsif ($self->is_burn && $self->down) {
+        $res->{btc_block_hash} = unpack("H*", scalar reverse $self->down->btc_block_hash);
+        $res->{btc_txid}       = unpack("H*", scalar reverse hash256($self->down->btc_tx_data));
+    }
     return $res;
 }
 
@@ -803,11 +813,16 @@ sub deserialize {
     my $start_index = $data->index;
     my $tx_type = unpack("c", $data->get(1));
     my $slashing;
+    my $down;
     if ($tx_type == TX_TYPE_SLASHING) {
         $slashing = QBitcoin::Slashing->deserialize($data) // return undef;
     }
-    my $btc_txid;
-    $btc_txid = $data->get(32) // return undef if $tx_type == TX_TYPE_BURN;
+    elsif ($tx_type == TX_TYPE_DOWNGRADE) {
+        $down = QBitcoin::Downgrade->deserialize_commitment($data) // return undef;
+    }
+    elsif ($tx_type == TX_TYPE_BURN) {
+        $down = QBitcoin::Downgrade->deserialize_proof($data) // return undef;
+    }
     my $token_hash;
     $token_hash = $data->get_string() if $tx_type == TX_TYPE_TOKENS;
     my $inputs = $data->get_varint // return undef;
@@ -846,7 +861,7 @@ sub deserialize {
         tx_type       => $tx_type,
         $tx_type == TX_TYPE_TOKENS ? ( token_hash => $token_hash ) : (),
         $slashing ? ( slashing => $slashing ) : (),
-        $tx_type == TX_TYPE_BURN   ? ( btc_txid   => $btc_txid   ) : (),
+        $down ? ( down => $down ) : (),
         hash          => $hash,
         size          => $end_index - $start_index,
         received_time => time(),
@@ -1062,6 +1077,16 @@ sub is_coinbase { $_[0]->{tx_type} == TX_TYPE_COINBASE }
 sub is_tokens   { $_[0]->{tx_type} == TX_TYPE_TOKENS   }
 sub is_slashing { $_[0]->{tx_type} == TX_TYPE_SLASHING }
 sub is_burn     { $_[0]->{tx_type} == TX_TYPE_BURN     }
+sub is_downgrade { $_[0]->{tx_type} == TX_TYPE_DOWNGRADE }
+
+# Serialized downgrade payload placed right after tx_type: the commitment for a
+# DOWNGRADE transaction, the BTC SPV proof for a BURN transaction.
+sub down_payload {
+    my $self = shift;
+    return $self->down->serialize_commitment if $self->is_downgrade && $self->down;
+    return $self->down->serialize_proof      if $self->is_burn      && $self->down;
+    return "";
+}
 
 sub validate_coinbase {
     my $self = shift;
@@ -1454,7 +1479,18 @@ sub pre_load {
             }
             $attr->{in} = \@inputs;
         }
-        if ($attr->{tx_type} == TX_TYPE_TOKENS) {
+        if ($attr->{tx_type} == TX_TYPE_DOWNGRADE || $attr->{tx_type} == TX_TYPE_BURN) {
+            my ($row) = QBitcoin::DowngradeData->fetch(tx_id => $attr->{id});
+            if (!$row) {
+                Errf("No downgrade payload for transaction %s", unpack("H*", $attr->{hash}));
+                die "No downgrade payload for transaction " . unpack("H*", $attr->{hash}) . "\n";
+            }
+            my $payload = Bitcoin::Serialized->new($row->{payload});
+            $attr->{down} = $attr->{tx_type} == TX_TYPE_DOWNGRADE
+                ? QBitcoin::Downgrade->deserialize_commitment($payload)
+                : QBitcoin::Downgrade->deserialize_proof($payload);
+        }
+        elsif ($attr->{tx_type} == TX_TYPE_TOKENS) {
             my $token_hash;
             if ($attr->{token_id} ) {
                 my ($token_tx) = QBitcoin::Transaction->fetch(id => $attr->{token_id});
@@ -1479,14 +1515,6 @@ sub pre_load {
                 die "No evidence for slashing transaction " . unpack("H*", $attr->{hash}) . "\n";
             }
             $attr->{slashing} = QBitcoin::Slashing->from_row($s);
-        }
-        elsif ($attr->{tx_type} == TX_TYPE_BURN) {
-            my ($burn) = QBitcoin::Burn->fetch(tx_id => $attr->{id});
-            if (!$burn) {
-                Errf("No burn_txid reference for burn transaction %s", unpack("H*", $attr->{hash}));
-                die "No burn_txid reference for burn transaction " . unpack("H*", $attr->{hash}) . "\n";
-            }
-            $attr->{btc_txid} = $burn->{btc_txid};
         }
     }
     return $attr;
