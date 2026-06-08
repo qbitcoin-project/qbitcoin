@@ -2,26 +2,22 @@ package QBitcoin::Downgrade::Spv;
 use warnings;
 use strict;
 
-# An observed BTC payment for a pending downgrade, awaiting confirmations before a
-# burn transaction is generated from it. The node watches the BTC chain (as it does
-# for upgrade coinbases) and, when it sees a BTC transaction whose txid matches a
-# pending downgrade commitment, builds the merkle path and stores it here, linked to
-# the BTC block. ON DELETE CASCADE on the BTC block makes a BTC reorg drop the row.
+# BTC SPV proof of the payment for a downgrade (storage only).
 #
-# get_new() returns rows whose BTC payment is deeply enough confirmed
-# (COINBASE_CONFIRM_BLOCKS blocks AND COINBASE_CONFIRM_TIME, same rule as coinbases),
-# so a small BTC reorg can't flip a burn between valid and invalid.
+# A row is created by the BTC watcher when it sees the funding transaction of a
+# pending downgrade (matched by committed txid). While burn_tx_id IS NULL it is an
+# observed-but-not-yet-burned payment awaiting confirmations; once a burn is built
+# or received, burn_tx_id points to it and the row also persists that burn's proof.
+#
+# A BTC reorg is handled explicitly (delete_pending_above) and only drops pending
+# rows, so a confirmed burn keeps its proof (mirrors the coinbase handling).
 
 use Scalar::Util qw(weaken refaddr);
 use QBitcoin::Accessors qw(new mk_accessors);
 use QBitcoin::Log;
 use QBitcoin::Const;
-use QBitcoin::ORM qw(:types dbh find create delete_by DEBUG_ORM);
-use QBitcoin::Crypto qw(hash160);
-use QBitcoin::Downgrade;
-use QBitcoin::TXO;
-use QBitcoin::Transaction;
-use Bitcoin::Serialized;
+use QBitcoin::ORM qw(:types dbh fetch find create DEBUG_ORM);
+use QBitcoin::Crypto qw(hash256);
 use Bitcoin::Block;
 
 use constant TABLE => 'downgrade_spv';
@@ -30,19 +26,39 @@ use constant PRIMARY_KEY => 'downgrade_tx_id';
 use constant FIELDS => {
     downgrade_tx_id  => NUMERIC,
     btc_block_height => NUMERIC,
+    btc_block_hash   => BINARY,
     btc_tx_num       => NUMERIC,
     btc_tx_hash      => BINARY,
     merkle_path      => BINARY,
     btc_tx_data      => BINARY,
+    burn_tx_id       => NUMERIC,
 };
 
 mk_accessors(keys %{&FIELDS});
 
-my %SPV; # short-lived cache of recently produced entries (by downgrade_tx_id)
+my %SPV; # short-lived cache of recently produced (not yet burned) entries
 
-# Return SPV records whose BTC payment is confirmed deeply enough to burn and whose
-# downgrade output is still unspent. Each returned object also carries the data
-# needed to build the burn: the downgrade-tx hash and its output value/data/script.
+# Map { committed_btc_txid => downgrade_tx_id } of pending downgrades whose BTC
+# payment has not been recorded yet (no SPV row). Read straight from the typed
+# commitment columns; rebuilt per BTC block (the set is small).
+sub pending_txids {
+    my $class = shift;
+    my $sql =
+        "SELECT d.btc_txid, d.tx_id FROM `downgrade` AS d"
+      . " JOIN `txo` AS o ON (o.tx_in = d.tx_id AND o.num = 0)"
+      . " LEFT JOIN `" . TABLE . "` AS sv ON (sv.downgrade_tx_id = d.tx_id)"
+      . " WHERE o.tx_out IS NULL AND sv.downgrade_tx_id IS NULL";
+    my $sth = dbh->prepare($sql);
+    $sth->execute();
+    my %pending;
+    while (my $row = $sth->fetchrow_hashref()) {
+        $pending{$row->{btc_txid}} = $row->{tx_id};
+    }
+    return \%pending;
+}
+
+# Confirmed, not-yet-burned SPVs whose downgrade output is still unspent. Each row
+# also carries what the burn builder needs: downgrade-tx hash, output value/data/script.
 sub get_new {
     my $class = shift;
     my ($time) = @_;
@@ -56,13 +72,14 @@ sub get_new {
     my $max_height = $matched_block->height - COINBASE_CONFIRM_BLOCKS;
 
     my $sql =
-        "SELECT sv.downgrade_tx_id, sv.btc_block_height, sv.btc_tx_num, sv.btc_tx_hash, sv.merkle_path, sv.btc_tx_data,"
+        "SELECT sv.downgrade_tx_id, sv.btc_block_height, sv.btc_block_hash, sv.btc_tx_num, sv.btc_tx_hash, sv.merkle_path, sv.btc_tx_data,"
       . " tx.hash AS dg_tx_hash, o.value AS dg_value, o.data AS dg_data, s.hash AS dg_scripthash"
       . " FROM `" . TABLE . "` AS sv"
       . " JOIN `transaction`   AS tx ON (tx.id = sv.downgrade_tx_id)"
       . " JOIN `txo`           AS o  ON (o.tx_in = sv.downgrade_tx_id AND o.num = 0)"
       . " JOIN `redeem_script` AS s  ON (s.id = o.scripthash)"
-      . " WHERE sv.btc_block_height IS NOT NULL AND sv.btc_block_height <= ? AND o.tx_out IS NULL";
+      . " WHERE sv.burn_tx_id IS NULL AND sv.btc_block_height IS NOT NULL"
+      . " AND sv.btc_block_height <= ? AND o.tx_out IS NULL";
     DEBUG_ORM && Debugf("sql: [%s] values [%d]", $sql, $max_height);
     my $sth = dbh->prepare($sql);
     $sth->execute($max_height);
@@ -78,91 +95,37 @@ sub get_new {
     return @spv;
 }
 
-# Map { committed_btc_txid => downgrade_tx_id } of pending downgrades whose BTC
-# payment has not been recorded yet (no SPV row). Rebuilt from the database; the
-# set is small (only in-flight downgrades), so it is cheap to recompute per BTC
-# block. Used by the BTC watcher to recognize the funding transaction.
-sub pending_txids {
+# Persist the proof for a burn transaction (link an existing detection row, or
+# insert one if this node never detected the payment, e.g. received the burn).
+sub store_burn {
     my $class = shift;
-    my $sql =
-        "SELECT d.payload, d.tx_id FROM `downgrade` AS d"
-      . " JOIN `transaction`  AS tx ON (tx.id = d.tx_id)"
-      . " JOIN `txo`          AS o  ON (o.tx_in = d.tx_id AND o.num = 0)"
-      . " LEFT JOIN `" . TABLE . "` AS sv ON (sv.downgrade_tx_id = d.tx_id)"
-      . " WHERE tx.tx_type = ? AND o.tx_out IS NULL AND sv.downgrade_tx_id IS NULL";
-    my $sth = dbh->prepare($sql);
-    $sth->execute(TX_TYPE_DOWNGRADE);
-    my %pending;
-    while (my $row = $sth->fetchrow_hashref()) {
-        my $commit = QBitcoin::Downgrade->deserialize_commitment(Bitcoin::Serialized->new($row->{payload}))
-            or next;
-        $pending{$commit->btc_txid} = $row->{tx_id};
+    my ($downgrade_tx_hash, $proof, $burn_tx_id) = @_;
+    my ($dg_id) = dbh->selectrow_array("SELECT id FROM `transaction` WHERE hash = UNHEX(?)", undef, unpack("H*", $downgrade_tx_hash));
+    defined $dg_id or die "store_burn: no downgrade transaction for burn\n";
+    if (dbh->selectrow_array("SELECT 1 FROM `" . TABLE . "` WHERE downgrade_tx_id = ?", undef, $dg_id)) {
+        dbh->do("UPDATE `" . TABLE . "` SET burn_tx_id = ? WHERE downgrade_tx_id = ?", undef, $burn_tx_id, $dg_id);
     }
-    return \%pending;
+    else {
+        my ($btc_block) = Bitcoin::Block->find(hash => $proof->btc_block_hash);
+        $class->create({
+            downgrade_tx_id  => $dg_id,
+            btc_block_height => ($btc_block ? $btc_block->height : undef),
+            btc_block_hash   => $proof->btc_block_hash,
+            btc_tx_num       => $proof->btc_tx_num,
+            btc_tx_hash      => hash256($proof->btc_tx_data),
+            merkle_path      => $proof->merkle_path,
+            btc_tx_data      => $proof->btc_tx_data,
+            burn_tx_id       => $burn_tx_id,
+        });
+    }
 }
 
-# Build burn transactions for all confirmed downgrade SPVs and add them to mempool.
-sub generate_burns {
+# BTC reorg: drop only the not-yet-burned SPVs at or above the reverted height
+# (their payment may have moved); confirmed burns keep their proof.
+sub delete_pending_above {
     my $class = shift;
-    my ($time) = @_;
-    my $count = 0;
-    for my $spv ($class->get_new($time)) {
-        my $tx = $class->_build_burn_tx($spv)
-            or next;
-        Infof("Generated downgrade burn %s for downgrade tx_id %u", $tx->hash_str, $spv->downgrade_tx_id);
-        $count++;
-    }
-    return $count;
-}
-
-sub _build_burn_tx {
-    my ($class, $spv) = @_;
-
-    my $dg_sh  = $spv->{dg_scripthash};
-    my $redeem = $dg_sh eq hash160(QBT_DOWNGRADE_SCRIPT)    ? QBT_DOWNGRADE_SCRIPT
-               : $dg_sh eq hash160(QBT_DOWNGRADE_PQ_SCRIPT) ? QBT_DOWNGRADE_PQ_SCRIPT
-               : return undef;
-    my $txo = QBitcoin::TXO->new_saved({
-        value      => $spv->{dg_value},
-        tx_in      => $spv->{dg_tx_hash},
-        num        => 0,
-        scripthash => $dg_sh,
-        data       => $spv->{dg_data},
-    });
-    return undef unless $txo->unspent;
-    $txo->set_redeem_script($redeem);
-
-    my ($btc_block) = Bitcoin::Block->find(height => $spv->btc_block_height);
-    return undef unless $btc_block;
-    my $proof = QBitcoin::Downgrade->new({
-        btc_block_hash => $btc_block->hash,
-        btc_tx_num     => $spv->btc_tx_num,
-        merkle_path    => $spv->merkle_path,
-        btc_tx_data    => $spv->btc_tx_data,
-    });
-
-    my $tx = QBitcoin::Transaction->new(
-        in            => [ { txo => $txo, siglist => [ "\x01" ] } ],  # permissionless IF (TRUE selector)
-        out           => [],
-        fee           => $txo->value,
-        tx_type       => TX_TYPE_BURN,
-        down          => $proof,
-        received_time => time(),
-    );
-    $tx->calculate_hash;
-    if (QBitcoin::Transaction->check_by_hash($tx->hash)) {
-        Debugf("Downgrade burn %s already known", $tx->hash_str);
-        return undef;
-    }
-    $txo->spent_add($tx);
-    if ($tx->validate() != 0) {
-        Errf("Generated downgrade burn %s is invalid", $tx->hash_str);
-        $txo->spent_del($tx);
-        return undef;
-    }
-    $tx->save();
-    $tx->announce();
-    return $tx;
+    my ($height) = @_;
+    dbh->do("DELETE FROM `" . TABLE . "` WHERE burn_tx_id IS NULL AND btc_block_height > ?", undef, $height);
 }
 
 sub DESTROY {
