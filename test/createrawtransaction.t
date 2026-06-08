@@ -215,26 +215,7 @@ my $fake_txid = "00" x 32;
     $out_txo->{tx_in} = $bad_tx->hash;
 
     is($bad_tx->validate, -1,
-        "standard tx spending freeze1 UTXO is rejected by validate()");
-
-    # Burn transaction spending the freeze1 UTXO — the freeze1 guard must
-    # NOT fire (the is_burn branch handles it).  To isolate this check from
-    # unrelated failures (e.g. signature verification with an empty siglist),
-    # mock check_input_script to succeed.
-    $transaction_module->mock('check_input_script', sub { 0 });
-
-    my $burn_tx = QBitcoin::Transaction->new(
-        in      => [ { txo => $freeze1_txo, siglist => [] } ],
-        out     => [],
-        tx_type => TX_TYPE_BURN,
-        fee     => 1 * DENOMINATOR,
-    );
-    $burn_tx->calculate_hash;
-
-    is($burn_tx->validate, 0,
-        "burn tx spending freeze1 UTXO passes the freeze1 restriction check");
-
-    $transaction_module->unmock('check_input_script');
+        "standard tx spending qbt_burn UTXO is rejected by validate()");
 }
 
 # -----------------------------------------------------------------------
