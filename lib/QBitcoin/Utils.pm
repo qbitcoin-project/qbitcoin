@@ -35,7 +35,7 @@ use QBitcoin::Transaction;
 use QBitcoin::Block;
 use QBitcoin::MinFee qw(MIN_FEE);
 use QBitcoin::ProtocolState qw(blockchain_synced mempool_synced);
-use Bitcoin::Address qw(is_btc_address);
+use Bitcoin::Address qw(is_btc_address btc_address_to_scriptpubkey);
 
 use constant MAX_TXO_PER_ADDRESS => 10_000;
 
@@ -951,18 +951,20 @@ sub create_txo {
             $data = TXO_DATA_TAG . $out->{$key};
         }
         elsif (is_btc_address($key)) {
-            # Bitcoin address as destination: create an output to the freeze1 address
-            # (QBT_BURN_SCRIPT) with the Bitcoin address string stored verbatim in the
-            # data field (ASCII bytes).  Supports P2PKH, P2SH, P2WPKH, P2WSH, P2TR.
-            # The downgrade service reads the address string from data directly and
-            # releases the corresponding BTC to that address.
+            # Bitcoin address as destination: create a trustless-downgrade freeze
+            # output. data = [reclaim_id (20)][btc scriptPubKey]. The scriptPubKey is
+            # what the BTC payment must pay (any address format; consensus byte-compares
+            # it, never interprets it). reclaim_id is left as a 20-byte zero sentinel and
+            # filled with the first signing key's pubkeyhash at signrawtransactionwithkey.
+            my $spk = btc_address_to_scriptpubkey($key)
+                or return undef;
             my $value = $out->{$key};
             $value =~ /^[0-9]+$/ && $value <= MAX_VALUE
                 or return undef;
             push @txo, {
-                scripthash => hash160(QBT_BURN_SCRIPT),
+                scripthash => hash160(QBT_FREEZE_SCRIPT),
                 value      => $value,
-                data       => $key,
+                data       => ("\x00" x 20) . $spk,
             };
         }
         elsif (my $scripthash = eval { scripthash_by_address($key) }) {
