@@ -52,6 +52,7 @@ my $STAKE_ADDRESS;
 my $WATCHED_ADDRESS;
 my $MY_HASHES;
 my $WATCH_HASHES;
+my $MY_PUBKEYHASHES;
 my %TAG_CACHE;
 
 sub watched_address {
@@ -312,6 +313,9 @@ sub remove {
             delete $WATCH_HASHES->{$hash};
         }
     }
+    if ($MY_PUBKEYHASHES) {
+        delete $MY_PUBKEYHASHES->{$_} foreach keys %pubkeyhash;
+    }
     # Re-add with the remaining roles: the same address may still be delegated
     # to this node for staking
     foreach my $utxo (myutxo_list()) {
@@ -404,6 +408,23 @@ sub get_by_hash {
         }
     }
     return $include_watchonly ? $WATCH_HASHES->{$hash} : $MY_HASHES->{$hash};
+}
+
+# Look up one of my addresses by hash160/hash256 of its public key (the reclaim_id
+# stored in a freeze/downgrade output), as opposed to by output scripthash.
+sub get_by_pubkeyhash {
+    my $class = shift;
+    my ($pubkeyhash) = @_;
+    if (!$MY_PUBKEYHASHES) {
+        $MY_PUBKEYHASHES = {};
+        foreach my $address (my_address()) {
+            next unless $address->private_key;
+            my $pk = $address->pubkey;
+            $MY_PUBKEYHASHES->{hash160($pk)} = $address;
+            $MY_PUBKEYHASHES->{hash256($pk)} = $address;
+        }
+    }
+    return $MY_PUBKEYHASHES->{$pubkeyhash};
 }
 
 sub script_by_hash {
