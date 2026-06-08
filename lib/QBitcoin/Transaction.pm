@@ -19,7 +19,8 @@ use QBitcoin::Coinbase;
 use QBitcoin::Slashing;
 use QBitcoin::Slashing::Stored;
 use QBitcoin::Downgrade;
-use QBitcoin::DowngradeData;
+use QBitcoin::Downgrade::Commitment;
+use QBitcoin::Downgrade::Spv;
 use QBitcoin::ValueUpgraded qw(level_by_total downgrade_net);
 use QBitcoin::ConnectionList;
 use QBitcoin::Notify;
@@ -526,8 +527,18 @@ sub store {
             %{$self->slashing->stored_fields},
         });
     }
-    elsif (($self->is_downgrade || $self->is_burn) && $self->down) {
-        QBitcoin::DowngradeData->create({ tx_id => $self->id, payload => $self->down_payload });
+    elsif ($self->is_downgrade && $self->down) {
+        QBitcoin::Downgrade::Commitment->create({
+            tx_id        => $self->id,
+            btc_txid     => $self->down->btc_txid,
+            btc_vout     => $self->down->btc_vout,
+            btc_value    => $self->down->btc_value,
+            scriptpubkey => $self->down->scriptpubkey,
+        });
+    }
+    elsif ($self->is_burn && $self->down) {
+        # Link (or insert) the SPV proof row for this burn's source downgrade.
+        QBitcoin::Downgrade::Spv->store_burn($self->in->[0]{txo}->tx_in, $self->down, $self->id);
     }
     foreach my $in (@{$self->in}) {
         $in->{txo}->store_spend($self),
@@ -1599,16 +1610,31 @@ sub pre_load {
             }
             $attr->{in} = \@inputs;
         }
-        if ($attr->{tx_type} == TX_TYPE_DOWNGRADE || $attr->{tx_type} == TX_TYPE_BURN) {
-            my ($row) = QBitcoin::DowngradeData->fetch(tx_id => $attr->{id});
-            if (!$row) {
-                Errf("No downgrade payload for transaction %s", unpack("H*", $attr->{hash}));
-                die "No downgrade payload for transaction " . unpack("H*", $attr->{hash}) . "\n";
+        if ($attr->{tx_type} == TX_TYPE_DOWNGRADE) {
+            my ($c) = QBitcoin::Downgrade::Commitment->find(tx_id => $attr->{id});
+            if (!$c) {
+                Errf("No downgrade commitment for transaction %s", unpack("H*", $attr->{hash}));
+                die "No downgrade commitment for transaction " . unpack("H*", $attr->{hash}) . "\n";
             }
-            my $payload = Bitcoin::Serialized->new($row->{payload});
-            $attr->{down} = $attr->{tx_type} == TX_TYPE_DOWNGRADE
-                ? QBitcoin::Downgrade->deserialize_commitment($payload)
-                : QBitcoin::Downgrade->deserialize_proof($payload);
+            $attr->{down} = QBitcoin::Downgrade->new({
+                btc_txid     => $c->btc_txid,
+                btc_vout     => $c->btc_vout,
+                btc_value    => $c->btc_value,
+                scriptpubkey => $c->scriptpubkey,
+            });
+        }
+        elsif ($attr->{tx_type} == TX_TYPE_BURN) {
+            my ($sv) = QBitcoin::Downgrade::Spv->find(burn_tx_id => $attr->{id});
+            if (!$sv) {
+                Errf("No SPV proof for burn transaction %s", unpack("H*", $attr->{hash}));
+                die "No SPV proof for burn transaction " . unpack("H*", $attr->{hash}) . "\n";
+            }
+            $attr->{down} = QBitcoin::Downgrade->new({
+                btc_block_hash => $sv->btc_block_hash,
+                btc_tx_num     => $sv->btc_tx_num,
+                merkle_path    => $sv->merkle_path,
+                btc_tx_data    => $sv->btc_tx_data,
+            });
         }
         elsif ($attr->{tx_type} == TX_TYPE_TOKENS) {
             my $token_hash;

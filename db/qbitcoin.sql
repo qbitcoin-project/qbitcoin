@@ -69,29 +69,35 @@ CREATE TABLE `slashing` (
   FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
 );
 
--- Trustless-downgrade payload: the commitment for a TX_TYPE_DOWNGRADE or the BTC
--- SPV proof for a TX_TYPE_BURN, kept so a stored transaction can be rebuilt from
--- the database (see QBitcoin::DowngradeData).
+-- Commitment of a TX_TYPE_DOWNGRADE: where/how much BTC must be paid. Kept so a
+-- stored downgrade transaction can be rebuilt from the database
+-- (see QBitcoin::Downgrade::Commitment).
 CREATE TABLE `downgrade` (
-  tx_id   integer NOT NULL PRIMARY KEY,
-  payload blob    NOT NULL,
+  tx_id        integer NOT NULL PRIMARY KEY,
+  btc_txid     binary(32)      NOT NULL,  -- committed BTC funding txid (internal byte order)
+  btc_vout     int unsigned    NOT NULL,
+  btc_value    bigint unsigned NOT NULL,
+  scriptpubkey varbinary(64)   NOT NULL,  -- committed BTC destination scriptPubKey
   FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
 );
 
--- Observed BTC payment for a pending downgrade, awaiting confirmations before a
--- burn transaction is generated from it. Keyed by the downgrade transaction; the
--- BTC SPV (block, merkle path, tx data) is built by the node when it sees the
--- committed btc txid in a BTC block. ON DELETE CASCADE on the BTC block height
--- drops it automatically on a BTC reorg (re-detected when the tx reappears).
+-- BTC SPV proof of the payment for a downgrade. While burn_tx_id IS NULL it is an
+-- observed-but-not-yet-burned payment awaiting confirmations; once a burn is built
+-- (or received) burn_tx_id points to it, and the row also serves as that burn
+-- transaction's proof persistence. The btc_block reference is intentionally NOT a
+-- cascade: a BTC reorg is handled explicitly (only pending rows are dropped), so a
+-- confirmed burn keeps its proof (mirrors how coinbases are handled).
 CREATE TABLE `downgrade_spv` (
   downgrade_tx_id  integer NOT NULL PRIMARY KEY,
   btc_block_height int unsigned DEFAULT NULL,
+  btc_block_hash   binary(32) NOT NULL,
   btc_tx_num       smallint unsigned NOT NULL,
   btc_tx_hash      binary(32) NOT NULL,
   merkle_path      blob(512) NOT NULL,
   btc_tx_data      longblob NOT NULL,
-  FOREIGN KEY (downgrade_tx_id)  REFERENCES `transaction` (id)     ON DELETE CASCADE,
-  FOREIGN KEY (btc_block_height) REFERENCES `btc_block`   (height) ON DELETE CASCADE
+  burn_tx_id       integer DEFAULT NULL,
+  FOREIGN KEY (downgrade_tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE,
+  FOREIGN KEY (burn_tx_id)      REFERENCES `transaction` (id) ON DELETE SET NULL
 );
 
 CREATE TABLE `tag` (
