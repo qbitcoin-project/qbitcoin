@@ -20,7 +20,7 @@ use QBitcoin::Slashing;
 use QBitcoin::Slashing::Stored;
 use QBitcoin::Downgrade;
 use QBitcoin::DowngradeData;
-use QBitcoin::ValueUpgraded qw(level_by_total);
+use QBitcoin::ValueUpgraded qw(level_by_total downgrade_net);
 use QBitcoin::ConnectionList;
 use QBitcoin::Notify;
 use QBitcoin::ProtocolState qw(skip_scripts blockchain_synced);
@@ -37,6 +37,12 @@ with 'QBitcoin::Transaction::Signature';
 # Outputs to this scripthash whose data field contains a valid Bitcoin address
 # string (ASCII) are downgrade requests; the address is shown by decoderawtransaction.
 use constant QBT_BURN_SCRIPTHASH => hash160(QBT_BURN_SCRIPT);
+
+# Trustless-downgrade script hashes, precomputed once.
+use constant QBT_FREEZE_SCRIPTHASH       => hash160(QBT_FREEZE_SCRIPT);
+use constant QBT_FREEZE_PQ_SCRIPTHASH    => hash160(QBT_FREEZE_PQ_SCRIPT);
+use constant QBT_DOWNGRADE_SCRIPTHASH    => hash160(QBT_DOWNGRADE_SCRIPT);
+use constant QBT_DOWNGRADE_PQ_SCRIPTHASH => hash160(QBT_DOWNGRADE_PQ_SCRIPT);
 
 use constant FIELDS => {
     id           => NUMERIC, # db primary key for reference links
@@ -1164,13 +1170,17 @@ sub validate {
         return 0 if skip_scripts();
         return $self->validate_slashing;
     }
-    # Transaction must contains at least one output (can't spend all inputs as fee)
-    if (!@{$self->out} && !$self->is_burn) {
-        Warningf("No outputs in transaction %s", $self->hash_str);
-        return -1;
+    if ($self->is_downgrade) {
+        return 0 if skip_scripts();
+        return $self->validate_downgrade;
     }
-    elsif ($self->is_burn && @{$self->out}) {
-        Warningf("Burn transaction %s must not contain outputs", $self->hash_str);
+    if ($self->is_burn) {
+        return 0 if skip_scripts();
+        return $self->validate_burn;
+    }
+    # Transaction must contains at least one output (can't spend all inputs as fee)
+    if (!@{$self->out}) {
+        Warningf("No outputs in transaction %s", $self->hash_str);
         return -1;
     }
     # Transaction must contains at least one input
@@ -1211,14 +1221,7 @@ sub validate {
                 $self->hash_str, $txo->tx_in_str, $txo->num);
             return -1;
         }
-        if ($self->is_burn) {
-            if ($txo->redeem_script ne QBT_BURN_SCRIPT) {
-                Warningf("Burn transaction %s has incorrect redeem script in input %s:%u",
-                    $self->hash_str, $txo->tx_in_str, $txo->num);
-                return -1;
-            }
-        }
-        elsif (($txo->scripthash // "") eq QBT_BURN_SCRIPTHASH) {
+        if (($txo->scripthash // "") eq QBT_BURN_SCRIPTHASH) {
             Warningf("Non-burn transaction %s attempts to spend qbt_burn output %s:%u",
                 $self->hash_str, $txo->tx_in_str, $txo->num);
             return -1;
@@ -1241,7 +1244,7 @@ sub validate {
             }
         }
     }
-    elsif ($self->is_standard || $self->is_tokens || $self->is_burn) {
+    elsif ($self->is_standard || $self->is_tokens) {
         if ($self->fee < 0) {
             Warningf("Fee for standard transaction %s is %li, can't be negative",
                 $self->hash_str, $self->fee);
@@ -1352,6 +1355,115 @@ sub validate_slashing {
         Warningf("Slashing transaction %s fine (fee) %li must be positive", $self->hash_str, $self->fee);
         return -1;
     }
+    return 0;
+}
+
+# TX_TYPE_DOWNGRADE: spends one freeze output (system IF branch), pins the qbtc
+# branch and commits the BTC destination/amount. Output is the downgrade-tx
+# reclaim script carrying the same reclaim_id, so the user can reclaim if the
+# burn never appears.
+sub validate_downgrade {
+    my $self = shift;
+
+    if (@{$self->in} != 1) {
+        Warningf("Downgrade transaction %s must have exactly 1 input", $self->hash_str);
+        return -1;
+    }
+    if (@{$self->out} != 1) {
+        Warningf("Downgrade transaction %s must have exactly 1 output", $self->hash_str);
+        return -1;
+    }
+    if ($self->fee != 0) {
+        Warningf("Downgrade transaction %s must have zero fee (has %li)", $self->hash_str, $self->fee);
+        return -1;
+    }
+    my $down = $self->down or do {
+        Warningf("Downgrade transaction %s has no commitment", $self->hash_str);
+        return -1;
+    };
+    my $txo = $self->in->[0]{txo};
+    my $sh  = $txo->scripthash // "";
+    my ($reclaim_len, $out_sh);
+    if    ($sh eq QBT_FREEZE_SCRIPTHASH)    { $reclaim_len = 20; $out_sh = QBT_DOWNGRADE_SCRIPTHASH;    }
+    elsif ($sh eq QBT_FREEZE_PQ_SCRIPTHASH) { $reclaim_len = 32; $out_sh = QBT_DOWNGRADE_PQ_SCRIPTHASH; }
+    else {
+        Warningf("Downgrade transaction %s input is not a freeze output", $self->hash_str);
+        return -1;
+    }
+    my $data = $txo->data // "";
+    if (length($data) < $reclaim_len) {
+        Warningf("Freeze input data too short in downgrade transaction %s", $self->hash_str);
+        return -1;
+    }
+    my $reclaim_id    = substr($data, 0, $reclaim_len);
+    my $committed_spk = substr($data, $reclaim_len);
+    # The committed BTC destination must be exactly the one the user put in freeze.
+    if ($down->scriptpubkey ne $committed_spk) {
+        Warningf("Downgrade transaction %s scriptpubkey does not match the freeze destination", $self->hash_str);
+        return -1;
+    }
+    # Value floor: at least the level-0 (1:1) rate minus the downgrade fee.
+    my $qbtc_value = $txo->value;
+    if ($down->btc_value < downgrade_net($qbtc_value)) {
+        Warningf("Downgrade transaction %s btc_value %lu below floor %lu",
+            $self->hash_str, $down->btc_value, downgrade_net($qbtc_value));
+        return -1;
+    }
+    # Output must be the downgrade-output reclaim script carrying the same
+    # reclaim_id, with the full value (it is burned later, fee stays zero here).
+    my $out = $self->out->[0];
+    if (($out->scripthash // "") ne $out_sh) {
+        Warningf("Downgrade transaction %s output is not a downgrade-output script", $self->hash_str);
+        return -1;
+    }
+    if (($out->data // "") ne $reclaim_id) {
+        Warningf("Downgrade transaction %s output data is not the reclaim_id", $self->hash_str);
+        return -1;
+    }
+    if ($out->value != $qbtc_value) {
+        Warningf("Downgrade transaction %s output value %lu != input %lu",
+            $self->hash_str, $out->value, $qbtc_value);
+        return -1;
+    }
+    # Freeze IF branch: system signature + OP_TX_TYPE == TX_TYPE_DOWNGRADE.
+    $self->check_input_script == 0
+        or return -1;
+    return 0;
+}
+
+# TX_TYPE_BURN: spends one downgrade output (permissionless IF branch) and proves,
+# via a BTC SPV proof, that the committed payment happened; finalizes the burn.
+sub validate_burn {
+    my $self = shift;
+
+    if (@{$self->out}) {
+        Warningf("Burn transaction %s must not contain outputs", $self->hash_str);
+        return -1;
+    }
+    if (@{$self->in} != 1) {
+        Warningf("Burn transaction %s must have exactly 1 input", $self->hash_str);
+        return -1;
+    }
+    my $proof = $self->down or do {
+        Warningf("Burn transaction %s has no SPV proof", $self->hash_str);
+        return -1;
+    };
+    my $txo = $self->in->[0]{txo};
+    my $sh  = $txo->scripthash // "";
+    unless ($sh eq QBT_DOWNGRADE_SCRIPTHASH || $sh eq QBT_DOWNGRADE_PQ_SCRIPTHASH) {
+        Warningf("Burn transaction %s input is not a downgrade output", $self->hash_str);
+        return -1;
+    }
+    my $src = (ref $self)->get($txo->tx_in) // (ref $self)->find(hash => $txo->tx_in);
+    unless ($src && $src->is_downgrade && $src->down) {
+        Warningf("Burn transaction %s input source is not a downgrade transaction", $self->hash_str);
+        return -1;
+    }
+    $proof->validate_spv($src->down) == 0
+        or return -1;
+    # Downgrade-output IF branch: permissionless, only constrains OP_TX_TYPE == BURN.
+    $self->check_input_script == 0
+        or return -1;
     return 0;
 }
 
