@@ -3,6 +3,8 @@ use warnings;
 use strict;
 use feature 'state';
 
+use QBitcoin::Const;
+
 use constant MAINNET => {
     GENESIS_HASH       => pack("H*", ""),
     QBT_LOCK_PUBKEY    => pack("H*", "03c3fe5cc51c8c1d6b04ec0fe00d3487863c0eec33ac6360095700868d66de19ff"),
@@ -69,16 +71,19 @@ use constant COMMON_CONST => {
     STATIC_REWARD      => 20_000_000, # 0.2 QBTC/block after upgrade finished
     REWARD_HALVING     => 10_000_000, # blocks, halving every ~ 3 years and emit 4M QBTC total as block rewards
     STAKE_MATURITY     => 12*3600,    # 12 hours
-    # Encoded for OP_CSV: number of BLOCK_INTERVAL(=10s) units OR'd with the QBitcoin
-    # time-type flag (1<<27), so the lock is by time, not by block count (qbtc skips
-    # empty blocks). See CSV handling in QBitcoin::Script.
+    # Trustless downgrade relative time-locks, encoded for OP_CSV as a number of
+    # BLOCK_INTERVAL(=10s) units OR'd with the QBitcoin time-type flag (1<<27), so the
+    # lock is by wall-clock time, not by block count (qbtc skips empty blocks). See CSV
+    # handling in QBitcoin::Script.
     DOWNGRADE_FREEZE_CSV => int(DOWNGRADE_FREEZE_SEC/10) | (1<<27),
+    DOWNGRADE_OUTPUT_CSV => int(DOWNGRADE_OUTPUT_SEC/10) | (1<<27),
 };
 
-use QBitcoin::Const;
 use QBitcoin::Script::OpCodes qw(:OPCODES);
 use QBitcoin::Config;
 use QBitcoin::Crypto qw(hash160);
+
+use constant COMMON_CONST;
 
 BEGIN {
     no strict 'refs';
@@ -96,26 +101,39 @@ sub QBT_LOCK_SCRIPT() {
     state $qbt_lock_script = OP_DUP . OP_HASH160 . pack("C", 20) . hash160(QBT_LOCK_PUBKEY) . OP_EQUALVERIFY . OP_CHECKSIG;
 }
 
-# Trustless-downgrade deposit (freeze) script. One constant address for all users;
-# per-user data = [hash160(user_pubkey) (20)][btc_address ASCII] (EC variant).
-#   OP_IF   <TX_TYPE_BURN=5> OP_TX_TYPE OP_EQUALVERIFY <QBT_LOCK_PUBKEY> OP_CHECKSIG
-#   OP_ELSE <CSV 48h> OP_CSV OP_DROP
-#           OP_OUTPUTDATA <0> <20> OP_SUBSTR     ; user_hash160 = data[0..19]
-#           OP_OVER OP_HASH160 OP_EQUALVERIFY OP_CHECKSIG
+# Build a "system-spend-or-user-reclaim" script used by both the freeze output and
+# the downgrade-tx output. Data layout: [reclaim_id (hash_len bytes)][btc scriptPubKey].
+#   OP_IF   <required tx_type> OP_TX_TYPE OP_EQUALVERIFY <QBT_LOCK_PUBKEY> OP_CHECKSIG
+#   OP_ELSE <CSV> OP_CSV OP_DROP
+#           OP_OUTPUTDATA <0> <hash_len> OP_SUBSTR     ; reclaim_id = data[0..hash_len-1]
+#           OP_OVER <hash_op> OP_EQUALVERIFY OP_CHECKSIG
 #   OP_ENDIF
-# System can spend it only inside a TX_TYPE_BURN (which carries the SPV proof of
-# the BTC HTLC); otherwise, after the timeout, the user reclaims their QBTC.
-sub QBT_FREEZE_SCRIPT() {
-    state $qbt_freeze_script =
+# The system may spend the output only inside a transaction of the required type
+# (freeze -> DOWNGRADE, downgrade output -> BURN); otherwise, after the time-lock,
+# the user reclaims their QBTC by proving ownership of reclaim_id.
+sub _reclaim_script {
+    my ($tx_type_op, $csv_value, $hash_len, $hash_op) = @_;
+    return
         OP_IF .
-        OP_5 . OP_TX_TYPE . OP_EQUALVERIFY .
+        $tx_type_op . OP_TX_TYPE . OP_EQUALVERIFY .
         chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG .
         OP_ELSE .
-        chr(4) . pack("V", DOWNGRADE_FREEZE_CSV) . OP_CSV . OP_DROP .
-        OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr(20) . OP_SUBSTR .
-        OP_OVER . OP_HASH160 . OP_EQUALVERIFY . OP_CHECKSIG .
+        chr(4) . pack("V", $csv_value) . OP_CSV . OP_DROP .
+        OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr($hash_len) . OP_SUBSTR .
+        OP_OVER . $hash_op . OP_EQUALVERIFY . OP_CHECKSIG .
         OP_ENDIF;
-};
+}
+
+# Freeze deposit scripts (one constant address per signature class). data =
+# [hash160/hash256(user_pubkey)][btc scriptPubKey]. Spendable by the system only in
+# a TX_TYPE_DOWNGRADE, or reclaimed by the user after DOWNGRADE_FREEZE_SEC.
+sub QBT_FREEZE_SCRIPT()    { state $qbt_freeze_script    = _reclaim_script(OP_6, DOWNGRADE_FREEZE_CSV, 20, OP_HASH160) }
+sub QBT_FREEZE_PQ_SCRIPT() { state $qbt_freeze_pq_script = _reclaim_script(OP_6, DOWNGRADE_FREEZE_CSV, 20, OP_HASH256) }
+
+# Downgrade-tx output scripts. Spendable by the system only in a TX_TYPE_BURN (which
+# carries the BTC SPV proof), or reclaimed by the user after DOWNGRADE_OUTPUT_SEC.
+use constant QBT_DOWNGRADE_SCRIPT    => _reclaim_script(OP_5, DOWNGRADE_OUTPUT_CSV, 20, OP_HASH160);
+use constant QBT_DOWNGRADE_PQ_SCRIPT => _reclaim_script(OP_5, DOWNGRADE_OUTPUT_CSV, 32, OP_HASH256);
 
 # Post-quantum variant: data = [hash256(user_pubkey) (32)][btc_address ASCII].
 sub QBT_FREEZE_PQ_SCRIPT() {
@@ -130,8 +148,6 @@ sub QBT_FREEZE_PQ_SCRIPT() {
         OP_ENDIF;
 }
 
-use constant COMMON_CONST;
-
 use Exporter 'import';
 our @EXPORT = (
     keys %{&MAINNET},
@@ -139,6 +155,10 @@ our @EXPORT = (
     'QBT_BURN_SCRIPT',
     'QBT_BURN_LEN',
     'QBT_LOCK_SCRIPT',
+    'QBT_FREEZE_SCRIPT',
+    'QBT_FREEZE_PQ_SCRIPT',
+    'QBT_DOWNGRADE_SCRIPT',
+    'QBT_DOWNGRADE_PQ_SCRIPT',
 );
 
 1;
