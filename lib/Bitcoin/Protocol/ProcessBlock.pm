@@ -12,6 +12,7 @@ use QBitcoin::BlockchainParams;
 use QBitcoin::ProtocolState qw(btc_synced);
 use QBitcoin::ConnectionList;
 use QBitcoin::Coinbase;
+use QBitcoin::Downgrade::Spv;
 use Bitcoin::Block;
 
 # these values shared between QBitcoin::Protocol and Bitcoin::Protocol, they are related to btc blockchain, not to protocol
@@ -70,6 +71,9 @@ sub process_btc_block {
                         # Explicitly delete coinbase b/c "on delete cascade" doesn't work for update reference key
                         # TODO: rollback QBT blocks if reverted blocks contain generated QBT coinbase
                         QBitcoin::Coinbase->delete_by(btc_block_height => { '>' => $start_block->height });
+                        # Drop not-yet-burned downgrade SPVs in the reverted range;
+                        # confirmed burns keep their proof (rollback is a TODO, as for coinbase).
+                        QBitcoin::Downgrade::Spv->delete_pending_above($start_block->height);
                     }
                     $revert_block->update(height => undef, $revert_block->time >= GENESIS_TIME ? (scanned => 0) : ());
                 }
