@@ -404,6 +404,7 @@ sub process_transactions {
             QBitcoin::Downgrade::Spv->create(
                 downgrade_tx_id  => $downgrade_tx_id,
                 btc_block_height => $block->height,
+                btc_block_hash   => $block->hash,
                 btc_tx_num       => $i,
                 btc_tx_hash      => $tx->hash,
                 merkle_path      => $block->merkle_path($i),
