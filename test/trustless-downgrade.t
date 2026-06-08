@@ -33,19 +33,18 @@ my $usr_h160 = hash160($usr_pk);
 my $oth_addr = ec_address();
 my $oth_pk   = $oth_addr->pubkey;
 
-# -----------------------------------------------------------------------
-# "system-spend-or-user-reclaim" script builder. Mirrors _reclaim_script in
-# Const.pm but with a test system pubkey so the IF branch can be exercised.
-# -----------------------------------------------------------------------
+# Freeze IF branch: system sig + TX_TYPE_DOWNGRADE (system-only, anti-grief).
+sub freeze_if { OP_7 . OP_TX_TYPE . OP_EQUALVERIFY . chr(length($_[0])) . $_[0] . OP_CHECKSIG }
+# Downgrade-output IF branch: permissionless, only constrains TX_TYPE_BURN.
+use constant DOWNGRADE_IF => OP_6 . OP_TX_TYPE . OP_EQUALVERIFY . OP_1;
+
+# Build a reclaim script (mirrors _reclaim_script in Const.pm) for a given IF branch.
 sub make_reclaim_script {
-    my ($system_pubkey, $tx_type_op, $csv, $pq) = @_;
+    my ($if_branch, $csv, $pq) = @_;
     my $size = $pq ? 32 : 20;
     my $hash = $pq ? OP_HASH256 : OP_HASH160;
     return
-        OP_IF .
-        $tx_type_op . OP_TX_TYPE . OP_EQUALVERIFY .
-        chr(length($system_pubkey)) . $system_pubkey . OP_CHECKSIG .
-        OP_ELSE .
+        OP_IF . $if_branch . OP_ELSE .
         chr(4) . pack("V", $csv) . OP_CSV . OP_DROP .
         OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr($size) . OP_SUBSTR .
         OP_OVER . $hash . OP_EQUALVERIFY . OP_CHECKSIG .
@@ -59,8 +58,8 @@ sub make_reclaim_script {
     my $tx_down = MockTx->new(tx_type => TX_TYPE_DOWNGRADE);
     my $tx_burn = MockTx->new(tx_type => TX_TYPE_BURN);
     my $script  = OP_TX_TYPE . OP_7 . OP_EQUALVERIFY . OP_1;
-    ok( script_eval([], $script, $tx_down, 0), "OP_TX_TYPE: DOWNGRADE (6) passes EQUALVERIFY with OP_7");
-    ok(!script_eval([], $script, $tx_burn, 0), "OP_TX_TYPE: BURN (5) fails EQUALVERIFY with OP_7");
+    ok( script_eval([], $script, $tx_down, 0), "OP_TX_TYPE: DOWNGRADE (7) passes EQUALVERIFY with OP_7");
+    ok(!script_eval([], $script, $tx_burn, 0), "OP_TX_TYPE: BURN (6) fails EQUALVERIFY with OP_7");
 }
 
 # -----------------------------------------------------------------------
@@ -87,11 +86,11 @@ sub make_reclaim_script {
 }
 
 # -----------------------------------------------------------------------
-# 4. Freeze IF branch: system spends, only in a TX_TYPE_DOWNGRADE
+# 4. Freeze IF branch: system-only spend in a TX_TYPE_DOWNGRADE
 #    siglist: [sig, "\x01"]  ("\x01" = TRUE => IF branch)
 # -----------------------------------------------------------------------
 {
-    my $script  = make_reclaim_script($sys_pk, OP_7, DOWNGRADE_FREEZE_CSV);
+    my $script  = make_reclaim_script(freeze_if($sys_pk), DOWNGRADE_FREEZE_CSV);
     my $sd      = "freeze_if_sign_data";
     my $sig     = signature($sd, $sys_addr, CRYPT_ALGO_ECDSA, SIGHASH_ALL);
     my $tx_down = MockTx->new(tx_type => TX_TYPE_DOWNGRADE, sign_data => $sd);
@@ -101,16 +100,15 @@ sub make_reclaim_script {
 }
 
 # -----------------------------------------------------------------------
-# 5. Downgrade-output IF branch: system spends, only in a TX_TYPE_BURN
+# 5. Downgrade-output IF branch: PERMISSIONLESS spend in a TX_TYPE_BURN
+#    siglist: ["\x01"]  (just the IF selector — no signature)
 # -----------------------------------------------------------------------
 {
-    my $script  = make_reclaim_script($sys_pk, OP_6, DOWNGRADE_OUTPUT_CSV);
-    my $sd      = "downgrade_if_sign_data";
-    my $sig     = signature($sd, $sys_addr, CRYPT_ALGO_ECDSA, SIGHASH_ALL);
-    my $tx_burn = MockTx->new(tx_type => TX_TYPE_BURN,      sign_data => $sd);
-    my $tx_down = MockTx->new(tx_type => TX_TYPE_DOWNGRADE, sign_data => $sd);
-    ok( script_eval([$sig, "\x01"], $script, $tx_burn, 0), "downgrade-output IF: system sig + TX_TYPE_BURN passes");
-    ok(!script_eval([$sig, "\x01"], $script, $tx_down, 0), "downgrade-output IF: TX_TYPE_DOWNGRADE fails OP_TX_TYPE/EQUALVERIFY");
+    my $script  = make_reclaim_script(DOWNGRADE_IF, DOWNGRADE_OUTPUT_CSV);
+    my $tx_burn = MockTx->new(tx_type => TX_TYPE_BURN);
+    my $tx_down = MockTx->new(tx_type => TX_TYPE_DOWNGRADE);
+    ok( script_eval(["\x01"], $script, $tx_burn, 0), "downgrade-output IF: TX_TYPE_BURN passes with no signature");
+    ok(!script_eval(["\x01"], $script, $tx_down, 0), "downgrade-output IF: TX_TYPE_DOWNGRADE fails OP_TX_TYPE/EQUALVERIFY");
 }
 
 # -----------------------------------------------------------------------
@@ -125,8 +123,8 @@ sub make_reclaim_script {
     my $tx      = MockTx->new(tx_type => TX_TYPE_STANDARD, sign_data => $sd, data => $data);
 
     for my $case (
-        [ "freeze",           make_reclaim_script($sys_pk, OP_7, DOWNGRADE_FREEZE_CSV), DOWNGRADE_FREEZE_SEC ],
-        [ "downgrade output", make_reclaim_script($sys_pk, OP_6, DOWNGRADE_OUTPUT_CSV), DOWNGRADE_OUTPUT_SEC ],
+        [ "freeze",           make_reclaim_script(freeze_if($sys_pk), DOWNGRADE_FREEZE_CSV), DOWNGRADE_FREEZE_SEC ],
+        [ "downgrade output", make_reclaim_script(DOWNGRADE_IF,        DOWNGRADE_OUTPUT_CSV), DOWNGRADE_OUTPUT_SEC ],
     ) {
         my ($name, $script, $sec) = @$case;
         ok( script_eval([$sig_usr, $usr_pk, ""], $script, $tx, 0), "$name ELSE: correct user passes");
@@ -137,8 +135,7 @@ sub make_reclaim_script {
 }
 
 # -----------------------------------------------------------------------
-# 7. Production constants: ELSE (user reclaim) of the real freeze and
-#    downgrade-output scripts must accept the user reclaim path.
+# 7. Production constants: spend paths of the real freeze/downgrade scripts.
 # -----------------------------------------------------------------------
 {
     my $sd      = "real_reclaim";
@@ -149,6 +146,10 @@ sub make_reclaim_script {
         "QBT_FREEZE_SCRIPT: user reclaim (ELSE) passes");
     ok( script_eval([$sig_usr, $usr_pk, ""], QBT_DOWNGRADE_SCRIPT, $tx, 0),
         "QBT_DOWNGRADE_SCRIPT: user reclaim (ELSE) passes");
+
+    my $tx_burn = MockTx->new(tx_type => TX_TYPE_BURN, data => $data);
+    ok( script_eval(["\x01"], QBT_DOWNGRADE_SCRIPT, $tx_burn, 0),
+        "QBT_DOWNGRADE_SCRIPT: permissionless BURN spend passes");
 }
 
 # -----------------------------------------------------------------------
@@ -161,7 +162,7 @@ SKIP: {
     skip "FALCON (post-quantum) keys unavailable", 2 unless $pq_addr;
     my $pq_pk    = $pq_addr->pubkey;
     my $pq_h256  = hash256($pq_pk);
-    my $script   = make_reclaim_script($sys_pk, OP_7, DOWNGRADE_FREEZE_CSV, 1);
+    my $script   = make_reclaim_script(freeze_if($sys_pk), DOWNGRADE_FREEZE_CSV, 1);
     my $sd       = "freeze_else_pq_sign_data";
     my $sig_pq   = signature($sd, $pq_addr, CRYPT_ALGO_FALCON, SIGHASH_ALL);
     my $data     = $pq_h256 . ("\x00" x 25);
