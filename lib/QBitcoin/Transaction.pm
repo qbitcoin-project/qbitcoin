@@ -27,7 +27,7 @@ use QBitcoin::ProtocolState qw(skip_scripts blockchain_synced);
 use QBitcoin::Generate::Control;
 use QBitcoin::Coins;
 use Bitcoin::Serialized;
-use Bitcoin::Address qw(is_btc_address);
+use Bitcoin::Address qw(is_btc_address scriptpubkey_to_btc_address);
 
 use Role::Tiny::With;
 with 'QBitcoin::Transaction::Tokens';
@@ -781,18 +781,26 @@ sub output_as_hashref {
         value   => $value / DENOMINATOR,
         address => $out->address,
     };
-    # If this output is to the qbt_burn address and the data field contains a
-    # valid Bitcoin address string (P2PKH, P2SH, P2WPKH, P2WSH, P2TR …),
-    # replace address/data with the Bitcoin address so decoderawtransaction
-    # mirrors what createrawtransaction accepted.
-    if (($out->scripthash // "") eq QBT_BURN_SCRIPTHASH && is_btc_address($out->data // "")) {
-        $res->{address} = $out->data;
-        delete $res->{data};
+    # Trustless-downgrade freeze output: data = [reclaim_id][btc scriptPubKey].
+    # Show the Bitcoin destination address (so decoderawtransaction mirrors what
+    # createrawtransaction accepted) and the reclaim status.
+    my $sh = $out->scripthash // "";
+    if ($sh eq QBT_FREEZE_SCRIPTHASH || $sh eq QBT_FREEZE_PQ_SCRIPTHASH) {
+        my $rlen = $sh eq QBT_FREEZE_SCRIPTHASH ? 20 : 32;
+        my $data = $out->data // "";
+        if (length($data) > $rlen) {
+            my $reclaim_id = substr($data, 0, $rlen);
+            my $btc_addr   = scriptpubkey_to_btc_address(substr($data, $rlen));
+            $res->{address}  = $btc_addr if defined $btc_addr;
+            $res->{downgrade} = {
+                reclaim => $reclaim_id eq ("\x00" x $rlen) ? "pending" : unpack("H*", $reclaim_id),
+            };
+        }
     }
     if ($self->is_tokens) {
         $res = { %$res, %{$self->token_output_as_hashref($out)} };
     }
-    elsif (length($out->data)) {
+    elsif (length($out->data) && !$res->{downgrade}) {
         if (ord($out->data) eq ord(TXO_DATA_TAG)) {
             $res->{tag} = substr($out->data, 1);
         }

@@ -120,9 +120,9 @@ my $fake_txid = "00" x 32;
 
 # -----------------------------------------------------------------------
 # 2. Bitcoin P2PKH downgrade output
-#    Passing a Bitcoin address should create a TXO to the freeze1 address
-#    with the BTC address string stored in the data field.
-#    decoderawtransaction must show the Bitcoin address back.
+#    Passing a Bitcoin address should create a freeze output with data =
+#    [20-byte zero reclaim sentinel][btc scriptPubKey]. decoderawtransaction
+#    must show the Bitcoin address back and a pending reclaim status.
 # -----------------------------------------------------------------------
 {
     my $hex = create_raw_tx(
@@ -139,9 +139,9 @@ my $fake_txid = "00" x 32;
     is(scalar @{$decoded->{out}}, 1,
         "bitcoin-downgrade tx: one output");
     is($decoded->{out}[0]{address}, $btc_addr,
-        "bitcoin-downgrade output: Bitcoin address is shown (not freeze1)");
-    ok(!exists $decoded->{out}[0]{data},
-        "bitcoin-downgrade output: no 'data' field (consumed by address decoding)");
+        "bitcoin-downgrade output: Bitcoin destination address is shown");
+    is($decoded->{out}[0]{downgrade}{reclaim}, "pending",
+        "bitcoin-downgrade output: reclaim_id is the pending sentinel");
     cmp_ok($decoded->{out}[0]{value}, '==', 1.0,
         "bitcoin-downgrade output: value is 1.0 QBTC");
 }
