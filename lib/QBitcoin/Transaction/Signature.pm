@@ -83,6 +83,21 @@ sub sign_transaction {
     $self->calculate_hash;
 }
 
+# Sign the system (IF) branch of a freeze script: the conversion service spends the
+# freeze into a TX_TYPE_DOWNGRADE. siglist: [ sig, "\x01" ]  ("\x01" = OP_TRUE = IF).
+# The CHECKSIG in the script is against QBT_LOCK_PUBKEY, so $address must hold the
+# system key.
+sub make_sign_freeze_if {
+    my $self = shift;
+    my ($in, $address, $input_num, $redeem_script) = @_;
+
+    $in->{txo}->set_redeem_script($redeem_script);
+    my $sign_alg     = _sign_alg($address);
+    my $sighash_type = SIGHASH_ALL;
+    my $sig = signature($self->sign_data($input_num, $sighash_type), $address, $sign_alg, $sighash_type);
+    $in->{siglist} = [ $sig, "\x01" ];
+}
+
 # Sign the user-reclaim (ELSE) branch of a freeze or downgrade-output script.
 # siglist: [ sig, pubkey, "" ]  ("" = OP_FALSE selects the ELSE branch)
 sub make_sign_reclaim {
