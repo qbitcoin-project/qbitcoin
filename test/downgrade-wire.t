@@ -12,7 +12,7 @@ use QBitcoin::Config;
 use QBitcoin::Crypto qw(hash256);
 use QBitcoin::Transaction;
 use QBitcoin::Downgrade;
-use QBitcoin::DowngradeData;
+use QBitcoin::Downgrade::Commitment;
 use Bitcoin::Serialized;
 
 $config->{regtest} = 1;
@@ -86,7 +86,7 @@ ok(!defined QBitcoin::Transaction->deserialize(Bitcoin::Serialized->new(pack("c"
     "truncated downgrade commitment rejected");
 
 # ---------------------------------------------------------------------------
-# Persistence: DowngradeData store/fetch and FK cascade
+# Persistence: typed commitment store/fetch and FK cascade
 # ---------------------------------------------------------------------------
 {
     my $dbh = dbh();
@@ -94,19 +94,17 @@ ok(!defined QBitcoin::Transaction->deserialize(Bitcoin::Serialized->new(pack("c"
     $dbh->do("INSERT INTO `transaction` (id,hash,block_height,block_pos,tx_type,size,fee) VALUES (1,X'aa',0,0,?,10,0)",
         undef, TX_TYPE_DOWNGRADE) or die $dbh->errstr;
 
-    my $commit  = QBitcoin::Downgrade->new({ btc_txid => $txid, btc_vout => 2, btc_value => 99, scriptpubkey => $spk });
-    my $payload = $commit->serialize_commitment;
-    QBitcoin::DowngradeData->create({ tx_id => 1, payload => $payload });
-    my ($row) = QBitcoin::DowngradeData->fetch(tx_id => 1);
-    ok($row, "downgrade payload stored and fetched");
-    is($row->{payload}, $payload, "stored payload round-trips");
-    my $back = QBitcoin::Downgrade->deserialize_commitment(Bitcoin::Serialized->new($row->{payload}));
-    is($back->btc_vout, 2, "reloaded commitment deserializes (btc_vout)");
-    is($back->scriptpubkey, $spk, "reloaded commitment deserializes (scriptpubkey)");
+    QBitcoin::Downgrade::Commitment->create({ tx_id => 1, btc_txid => $txid, btc_vout => 2, btc_value => 99, scriptpubkey => $spk });
+    my ($row) = QBitcoin::Downgrade::Commitment->find(tx_id => 1);
+    ok($row, "commitment stored and fetched");
+    is($row->btc_txid,     $txid, "stored commitment btc_txid round-trips");
+    is($row->btc_vout,     2,     "stored commitment btc_vout round-trips");
+    is($row->btc_value,    99,    "stored commitment btc_value round-trips");
+    is($row->scriptpubkey, $spk,  "stored commitment scriptpubkey round-trips");
 
     $dbh->do("DELETE FROM `transaction` WHERE id = 1") or die $dbh->errstr;
-    my ($gone) = QBitcoin::DowngradeData->fetch(tx_id => 1);
-    ok(!$gone, "downgrade payload removed by ON DELETE CASCADE");
+    my ($gone) = QBitcoin::Downgrade::Commitment->fetch(tx_id => 1);
+    ok(!$gone, "commitment removed by ON DELETE CASCADE");
 }
 
 done_testing();
