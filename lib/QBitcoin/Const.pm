@@ -61,8 +61,9 @@ use constant QBITCOIN_CONST => {
     # equivocation buried deeper can no longer be profitably slashed anyway.
     SLASHING_WINDOW         => 6 + 100, # INCORE_LEVELS + FORCE_BLOCKS
     QBT_BURN_VIRT_AGE       => 3600*24*365, # 1 year, to prevent reorg attacks on burn transactions after downgrade
-    # Trustless downgrade: relative time-lock for the user-reclaim path (48h).
-    DOWNGRADE_FREEZE_SEC    => 48*3600,
+    DOWNGRADE_FREEZE_SEC    => 48*3600,       # freeze -> user reclaim if no downgrade-tx appears
+    DOWNGRADE_OUTPUT_SEC    => 7*24*3600,     # downgrade output -> user reclaim if no burn-tx appears
+    DOWNGRADE_BTC_CONFIRMS  => 6,             # BTC confirmations required for the SPV proof in a burn-tx
     CONFIG_DIR              => "/etc",
     CONFIG_NAME             => "qbitcoin.conf",
     ZERO_HASH               => "\x00" x 32,
@@ -122,6 +123,7 @@ use constant TX_TYPES_CONST => {
     TX_TYPE_TOKENS   => 4,
     TX_TYPE_SLASHING => 5,
     TX_TYPE_BURN     => 6,
+    TX_TYPE_DOWNGRADE => 7,
 };
 
 use constant CRYPT_ALGO => {
