@@ -68,11 +68,12 @@ CREATE TABLE `slashing` (
   FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
 );
 
--- Reverse pointer for downgrades: maps a burn transaction to the Bitcoin
--- transaction that released the corresponding BTC (see QBitcoin::Burn).
-CREATE TABLE `burn_txid` (
-  tx_id    integer    NOT NULL PRIMARY KEY,
-  btc_txid binary(32) NOT NULL,
+-- Trustless-downgrade payload: the commitment for a TX_TYPE_DOWNGRADE or the BTC
+-- SPV proof for a TX_TYPE_BURN, kept so a stored transaction can be rebuilt from
+-- the database (see QBitcoin::DowngradeData).
+CREATE TABLE `downgrade` (
+  tx_id   integer NOT NULL PRIMARY KEY,
+  payload blob    NOT NULL,
   FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
 );
 
