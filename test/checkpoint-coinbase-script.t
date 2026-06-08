@@ -34,7 +34,7 @@ $config->{regtest} = 1;
 # Btc transaction paying to an ordinary P2PKH output, not to the current lock script
 my $value = 100000;
 my $old_lock_script = OP_DUP . OP_HASH160 . pack("C", 20) . hash160("old lock") . OP_EQUALVERIFY . OP_CHECKSIG;
-isnt($old_lock_script, QBT_BURN_SCRIPT, "output script differs from the current lock script");
+isnt($old_lock_script, QBT_FREEZE_SCRIPT, "output script differs from the current lock script");
 my $btc_tx_data = pack("VC", 1, 1); # version, txin_count
 $btc_tx_data .= "\x00" x 36 . "\x00" . "\x00" x 4; # prev output, script (var_str), sequence
 $btc_tx_data .= pack("C", 1); # txout_count
