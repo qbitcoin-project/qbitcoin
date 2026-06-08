@@ -1922,6 +1922,25 @@ sub burn_weight {
     return int($weight / 0x10000); # prevent int64 overflow for total blockchain weight
 }
 
+# A downgrade transaction pins the qbtc branch before the BTC payment confirms, so
+# it must carry the same heavy, age-independent weight as a burn: this is what makes
+# rolling back a freeze (after the BTC was paid) economically infeasible.
+sub downgrade_weight {
+    my $self = shift;
+    my $class = ref $self;
+    my $weight = 0;
+    foreach my $in (map { $_->{txo} } @{$self->in}) {
+        my $in_block_time = $class->txo_time($in);
+        if (!defined($in_block_time)) {
+            Errf("Can't get downgrade_weight for %s with unconfirmed input %s:%u",
+                $self->hash_str, $in->tx_in_str, $in->num);
+            die "Downgrade transaction " . $self->hash_str . " has unconfirmed input " . $in->tx_in_str . ":" . $in->num . "\n";
+        }
+        $weight += $in->value * (QBT_BURN_VIRT_AGE / BLOCK_INTERVAL);
+    }
+    return int($weight / 0x10000); # prevent int64 overflow for total blockchain weight
+}
+
 # $self->{min_tx_time}, $self->{min_tx_block_height}: minimal time and block_height for transaction set by checklocktimeverify opcode
 # Set to -1 if unlimited (default), undef if unknown (loaded from database, need to check)
 # $self->{min_tx_rel_time}, $self->{min_tx_rel_block_height}: minimal time and block_height for transaction

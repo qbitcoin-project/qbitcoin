@@ -44,6 +44,7 @@ sub validate {
         if (!$config->{regtest}) {
             $block->upgraded    = 0; # Genesis block has no upgrades
             $block->downgraded  = 0; # Genesis block has no downgrades
+            $block->downgrade_pinned = 0;
             $block->reward_fund = 0;
             $block->size = sum0(map { $_->size } @{$block->transactions});
             $block->min_fee = 0;
@@ -80,11 +81,13 @@ sub validate {
     my $min_fee = min_fee($block->prev_block, $block_size);
     my $upgraded   = $block->prev_block ? $block->prev_block->upgraded   // 0 : 0;
     my $downgraded = $block->prev_block ? $block->prev_block->downgraded // 0 : 0;
+    my $downgrade_pinned = $block->prev_block ? $block->prev_block->downgrade_pinned // 0 : 0;
     my $min_block_fee;
     my $was_standard;
     my $was_slashing;
     my $can_consume = 1; # Can validator consume transaction fee? No if stake transaction has no inputs
     my $was_burn;
+    my $was_downgrade;
     for (my $num = 0; $num < @{$block->transactions}; $num++) {
         my $transaction = $block->transactions->[$num];
         if ($tx_in_block{$transaction->hash}++) {
@@ -111,6 +114,9 @@ sub validate {
             if ($was_burn && !$config->{regtest}) {
                 return "Coinbase transaction " . $transaction->hash_str . " must not be after burn transaction $was_burn";
             }
+            if ($was_downgrade && !$config->{regtest}) {
+                return "Coinbase transaction " . $transaction->hash_str . " must not be after downgrade transaction $was_downgrade";
+            }
             if ($was_slashing && !$config->{regtest}) {
                 return "Coinbase transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
             }
@@ -122,10 +128,27 @@ sub validate {
             if ($was_slashing && !$config->{regtest}) {
                 return "Burn transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
             }
+            # Burn finalizes a downgrade: the freeze value (fee) is destroyed and the
+            # corresponding BTC is released from the peg. upgraded uses the full
+            # (fee-free) downgrade_value; the service fee only reduces what the user
+            # actually receives, checked separately against the SPV output value.
             my $btc_value = downgrade_value($transaction->fee, $upgraded);
             $upgraded   -= $btc_value;
             $downgraded += $btc_value;
             $was_burn = $transaction->hash_str;
+        }
+        elsif ($transaction->is_downgrade) {
+            # The downgrade only pins the branch (heavy weight) and reserves the
+            # conversion; the peg total changes when the matching burn is included
+            # (or is left unchanged if the user later reclaims).
+            if ($was_standard && !$config->{regtest}) {
+                return "Downgrade transaction " . $transaction->hash_str . " must not be after standard transaction $was_standard";
+            }
+            if ($was_slashing && !$config->{regtest}) {
+                return "Downgrade transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
+            }
+            $downgrade_pinned += sum0(map { $_->value } @{$transaction->out});
+            $was_downgrade = $transaction->hash_str;
         }
         elsif ($transaction->is_slashing) {
             $fee += $transaction->fee;
@@ -161,7 +184,7 @@ sub validate {
             $stake_reward = -$transaction->fee; # fee is negative for stake transactions
         }
         else {
-            return "Transaction " . $transaction->hash_str . " is not a coinbase, stake or standard transaction";
+            return "Transaction " . $transaction->hash_str . " is not a coinbase, downgrade, burn, stake or standard transaction";
         }
         if (!@{$transaction->in} && !$transaction->coins_created) {
             if ($num > 0) {
@@ -185,6 +208,7 @@ sub validate {
         or return "Incorrect stake reward for block " . $block->height . ": $stake_reward, expected $block_reward";
     $block->upgraded   = $upgraded;
     $block->downgraded = $downgraded;
+    $block->downgrade_pinned = $downgrade_pinned;
     my $static_reward = $block_reward ? (ref $block)->static_reward($block->prev_block, $block->time) : 0;
     $block->reward_fund = $block->prev_block ? $block->prev_block->reward_fund + $fee + $static_reward - $block_reward : 0;
     $block->size = $block_size;

@@ -32,6 +32,7 @@ use constant FIELDS => {
     weight      => NUMERIC,
     upgraded    => NUMERIC,
     downgraded  => NUMERIC,
+    downgrade_pinned => NUMERIC, # cumulative qbtc value pinned by downgrade txs (for reorg-penalty weight accounting)
     reward_fund => NUMERIC,
     min_fee     => NUMERIC,
     prev_hash   => BINARY,
@@ -83,6 +84,9 @@ sub self_weight {
                     }
                     elsif ($transaction->is_burn) {
                         $weight += $transaction->burn_weight($self->time);
+                    }
+                    elsif ($transaction->is_downgrade) {
+                        $weight += $transaction->downgrade_weight($self->time);
                     }
                     else {
                         last if $transaction->fee >= 0;
@@ -225,7 +229,10 @@ sub reorg_penalty {
     my $level_start = level_by_total($branch_start->upgraded);
     my $coinbase_qbtc = sqrt(upgrade_value($coinbase_btc, $level_end) * upgrade_value($coinbase_btc, $level_start)); # not fully accurate, but good enough for penalty calculation
     my $burn_qbtc     = sqrt(upgrade_value($downgraded_btc, $level_end) * upgrade_value($downgraded_btc, $level_start));
-    my $coinbase_weight = ($coinbase_qbtc * COINBASE_WEIGHT_TIME + $burn_qbtc * QBT_BURN_VIRT_AGE) / BLOCK_INTERVAL;
+    # Downgrade txs carry the same age-independent weight as burns; exclude it from
+    # stake_weight so the reorg penalty does not eat the anti-reorg pinning weight.
+    my $downgrade_qbtc = ($self->downgrade_pinned // 0) - ($branch_start->downgrade_pinned // 0);
+    my $coinbase_weight = ($coinbase_qbtc * COINBASE_WEIGHT_TIME + ($burn_qbtc + $downgrade_qbtc) * QBT_BURN_VIRT_AGE) / BLOCK_INTERVAL;
     my $stake_weight = $self->weight - $branch_start->weight - $coinbase_weight;
     return 0 if $stake_weight <= 0;
     my $coef;
