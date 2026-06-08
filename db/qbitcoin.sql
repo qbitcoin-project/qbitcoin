@@ -78,6 +78,22 @@ CREATE TABLE `downgrade` (
   FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
 );
 
+-- Observed BTC payment for a pending downgrade, awaiting confirmations before a
+-- burn transaction is generated from it. Keyed by the downgrade transaction; the
+-- BTC SPV (block, merkle path, tx data) is built by the node when it sees the
+-- committed btc txid in a BTC block. ON DELETE CASCADE on the BTC block height
+-- drops it automatically on a BTC reorg (re-detected when the tx reappears).
+CREATE TABLE `downgrade_spv` (
+  downgrade_tx_id  integer NOT NULL PRIMARY KEY,
+  btc_block_height int unsigned DEFAULT NULL,
+  btc_tx_num       smallint unsigned NOT NULL,
+  btc_tx_hash      binary(32) NOT NULL,
+  merkle_path      blob(512) NOT NULL,
+  btc_tx_data      longblob NOT NULL,
+  FOREIGN KEY (downgrade_tx_id)  REFERENCES `transaction` (id)     ON DELETE CASCADE,
+  FOREIGN KEY (btc_block_height) REFERENCES `btc_block`   (height) ON DELETE CASCADE
+);
+
 CREATE TABLE `tag` (
   id integer NOT NULL AUTO_INCREMENT PRIMARY KEY,
   tag varchar(64) NOT NULL UNIQUE
