@@ -10,6 +10,7 @@ use QBitcoin::BlockchainParams;
 use QBitcoin::Log;
 use QBitcoin::Produce;
 use QBitcoin::Coinbase;
+use QBitcoin::Downgrade::Spv;
 use QBitcoin::ORM::Transaction;
 use QBitcoin::ProtocolState qw(btc_synced blockchain_synced);
 use QBitcoin::ConnectionList;
@@ -384,6 +385,8 @@ sub process_transactions {
             unpack("H*", $block->merkle_root), unpack("H*", $block->calculate_merkle_root));
         return -1;
     }
+    # Pending downgrade payments to recognize in this block (committed btc txid).
+    my $pending_downgrade = QBitcoin::Downgrade::Spv->pending_txids();
     for (my $i = 0; $i < $tx_num; $i++) {
         my $tx = $block->transactions->[$i];
         for (my $num = 0; $num < @{$tx->out}; $num++) {
@@ -394,6 +397,18 @@ sub process_transactions {
             if (my $scripthash = QBitcoin::Coinbase->get_scripthash($tx, $num)) {
                 add_coinbase($block, $i, $num, $scripthash);
             }
+        }
+        # This BTC transaction funds a pending downgrade: record its SPV proof.
+        if (my $downgrade_tx_id = $pending_downgrade->{$tx->hash}) {
+            Infof("Detected BTC payment for downgrade tx_id %u: btc tx %s", $downgrade_tx_id, $tx->hash_hex);
+            QBitcoin::Downgrade::Spv->create(
+                downgrade_tx_id  => $downgrade_tx_id,
+                btc_block_height => $block->height,
+                btc_tx_num       => $i,
+                btc_tx_hash      => $tx->hash,
+                merkle_path      => $block->merkle_path($i),
+                btc_tx_data      => $tx->data,
+            );
         }
     }
     $block->update(scanned => 1);
