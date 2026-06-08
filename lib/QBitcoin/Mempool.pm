@@ -353,11 +353,11 @@ sub _insert_rate {
 }
 
 sub compare_tx {
-    # coinbase first, then burn, then slashing, then standard: the block layout enforced by
+    # coinbase first, then burn and downgrade, then slashing, then standard: the block layout enforced by
     # Block::Validate (stake, coinbase(s), burn(s), slashing(s), standard)
     return
-        ( $a->is_coinbase ? 0 : $a->is_burn ? 1 : $a->is_slashing ? 2 : 3 ) <=>
-            ( $b->is_coinbase ? 0 : $b->is_burn ? 1 : $b->is_slashing ? 2 : 3 ) ||
+        ( $a->is_coinbase ? 0 : $a->is_burn || $a->is_downgrade ? 1 : $a->is_slashing ? 2 : 3 ) <=>
+            ( $b->is_coinbase ? 0 : $b->is_burn || $a->is_downgrade ? 1 : $b->is_slashing ? 2 : 3 ) ||
         ( $a->up && $b->up ? (
             ($a->up->btc_block_height // 0) <=> ($b->up->btc_block_height // 0) ||
             ($a->up->btc_tx_num       // 0) <=> ($b->up->btc_tx_num       // 0) ||
