@@ -13,6 +13,7 @@ use QBitcoin::Block;
 use QBitcoin::RedeemScript;
 use QBitcoin::TXO;
 use QBitcoin::Coinbase;
+use QBitcoin::Downgrade::Reclaim;
 use QBitcoin::Address qw(scripthash_by_address);
 use QBitcoin::MyAddress qw(my_address stake_address);
 use QBitcoin::Delegation;
@@ -456,6 +457,8 @@ sub _generate {
         # Create new coinbase transaction and add it to mempool (if it's not there)
         QBitcoin::Transaction->new_coinbase($coinbase, $upgrade_level);
     }
+    # Auto-reclaim trustless-downgrade outputs whose time-lock has elapsed.
+    QBitcoin::Downgrade::Reclaim->scan_and_reclaim($time);
     my $prev_height = $prev_block ? $prev_block->height : -1;
     # Just get upper limit for the stake tx size
     my $stake_tx = make_stake_tx("0e0", "", $timeslot, $prev_height);
