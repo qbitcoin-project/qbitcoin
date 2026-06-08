@@ -28,6 +28,7 @@ our @EXPORT_OK = qw(
     encode_p2wsh
     encode_p2tr
     btc_address_to_scriptpubkey
+    scriptpubkey_to_btc_address
 );
 
 use constant CHECKSUM_LEN => 4;
@@ -282,6 +283,31 @@ sub btc_address_to_scriptpubkey {
         my $op  = $ver == 0 ? 0x00 : 0x50 + $ver; # OP_0..OP_16
         return pack("CC", $op, length($info->{hash})) . $info->{hash};
     }
+}
+
+# scriptpubkey_to_btc_address($spk) → Bitcoin address string, or undef if the
+# scriptPubKey is not a recognized standard form. Reverse of
+# btc_address_to_scriptpubkey; used for display (RPC/REST). Mainnet encodings.
+sub scriptpubkey_to_btc_address {
+    my ($spk) = @_;
+    return undef unless defined $spk;
+    my $len = length($spk);
+    if ($len == 25 && substr($spk, 0, 3) eq "\x76\xa9\x14" && substr($spk, 23, 2) eq "\x88\xac") {
+        return encode_btc_address("\x00", substr($spk, 3, 20));   # P2PKH
+    }
+    if ($len == 23 && substr($spk, 0, 2) eq "\xa9\x14" && substr($spk, 22, 1) eq "\x87") {
+        return encode_btc_address("\x05", substr($spk, 2, 20));   # P2SH
+    }
+    if ($len == 22 && substr($spk, 0, 2) eq "\x00\x14") {
+        return encode_p2wpkh(substr($spk, 2, 20));                # P2WPKH
+    }
+    if ($len == 34 && substr($spk, 0, 2) eq "\x00\x20") {
+        return encode_p2wsh(substr($spk, 2, 32));                 # P2WSH
+    }
+    if ($len == 34 && substr($spk, 0, 2) eq "\x51\x20") {
+        return encode_p2tr(substr($spk, 2, 32));                  # P2TR
+    }
+    return undef;
 }
 
 1;
