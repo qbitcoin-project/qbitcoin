@@ -12,7 +12,7 @@ use QBitcoin::ORM qw(find create :types);
 use QBitcoin::ValueUpgraded::PriceByLevel qw(@price_by_level);
 
 use Exporter qw(import);
-our @EXPORT_OK = qw(level_by_total upgrade_value downgrade_value downgrade_net);
+our @EXPORT_OK = qw(level_by_total upgrade_value downgrade_value downgrade_value_at_level downgrade_net);
 
 use constant TABLE => 'value_upgraded';
 
@@ -46,7 +46,11 @@ sub upgrade_value {
     return int($value * $price_by_level[$level] / 1000000);
 }
 
-sub _downgrade_value_for_level {
+# BTC value for `$value` qbtc at a fixed upgrade level — the pure rate conversion
+# (mirror of upgrade_value() on the other side), with NO reserve cap. Use this for
+# the downgrade floor at level 0 (the worst rate for the user): it is fork-agnostic
+# because it reads price_by_level[0] instead of assuming a 1:1 start rate.
+sub downgrade_value_at_level {
     my ($value, $level) = @_;
 
     return int($value * 1000000 / $price_by_level[$level]);
@@ -56,11 +60,11 @@ sub downgrade_value {
     my ($value, $upgraded) = @_;
 
     my $level = level_by_total($upgraded);
-    my $btc_value = _downgrade_value_for_level($value, $level);
+    my $btc_value = downgrade_value_at_level($value, $level);
     $btc_value = $upgraded if $btc_value > $upgraded;
     while ($level > 0 && level_by_total($upgraded - $btc_value) < $level) {
         $level--;
-        $btc_value = _downgrade_value_for_level($value, $level);
+        $btc_value = downgrade_value_at_level($value, $level);
         $btc_value = $upgraded if $btc_value > $upgraded;
     }
     return $btc_value;
