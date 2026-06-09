@@ -21,7 +21,7 @@ use QBitcoin::Slashing::Stored;
 use QBitcoin::Downgrade;
 use QBitcoin::Downgrade::Commitment;
 use QBitcoin::Downgrade::Spv;
-use QBitcoin::ValueUpgraded qw(level_by_total downgrade_net);
+use QBitcoin::ValueUpgraded qw(level_by_total downgrade_net downgrade_value_at_level);
 use QBitcoin::ConnectionList;
 use QBitcoin::Notify;
 use QBitcoin::ProtocolState qw(skip_scripts blockchain_synced);
@@ -1423,9 +1423,10 @@ sub validate_downgrade {
     }
     # Value floor: at least the level-0 (1:1) rate minus the downgrade fee.
     my $qbtc_value = $txo->value;
-    if ($down->btc_value < downgrade_net($qbtc_value)) {
+    my $min_btc_value = downgrade_net(downgrade_value_at_level($qbtc_value, 0));
+    if ($down->btc_value < $min_btc_value) {
         Warningf("Downgrade transaction %s btc_value %lu below floor %lu",
-            $self->hash_str, $down->btc_value, downgrade_net($qbtc_value));
+            $self->hash_str, $down->btc_value, $min_btc_value);
         return -1;
     }
     # Output must be the downgrade-output reclaim script carrying the same
