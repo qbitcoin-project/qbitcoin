@@ -11,7 +11,7 @@ use Test::MockModule;
 use QBitcoin::Config;
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
-use QBitcoin::Crypto qw(hash160 generate_keypair);
+use QBitcoin::Crypto qw(hash160 hash256 generate_keypair);
 use QBitcoin::Address qw(wallet_import_format);
 use QBitcoin::MyAddress;
 use QBitcoin::Script qw(script_eval);
@@ -21,7 +21,7 @@ use QBitcoin::Transaction;
 $config->{regtest} = 1;
 
 my $addr = QBitcoin::MyAddress->new(private_key => wallet_import_format(generate_keypair(CRYPT_ALGO_ECDSA)->pk_serialize));
-my $reclaim_id = hash160($addr->pubkey);
+my $reclaim_id = hash256($addr->pubkey);
 my $spk = "\x76\xa9\x14" . ("\xab" x 20) . "\x88\xac";
 my $V   = 100 * DENOMINATOR;
 
@@ -45,7 +45,7 @@ for my $case ([ "freeze", QBT_FREEZE_SCRIPT ], [ "downgrade output", QBT_DOWNGRA
 
 # --- wrong reclaim_id (not our key) must not produce a spendable siglist ---
 {
-    my $tx = reclaim_tx(QBT_FREEZE_SCRIPT, ("\x99" x 20) . $spk);  # someone else's reclaim_id
+    my $tx = reclaim_tx(QBT_FREEZE_SCRIPT, ("\x99" x 32) . $spk);  # someone else's reclaim_id
     $tx->make_sign_reclaim($tx->in->[0], $addr, 0, QBT_FREEZE_SCRIPT);
     ok(!script_eval($tx->in->[0]{siglist}, QBT_FREEZE_SCRIPT, $tx, 0),
         "freeze: signing with a key that doesn't match reclaim_id fails the hash check");

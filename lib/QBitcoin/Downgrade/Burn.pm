@@ -34,8 +34,7 @@ sub _build_burn_tx {
     my ($class, $spv) = @_;
 
     my $dg_sh  = $spv->{dg_scripthash};
-    my $redeem = $dg_sh eq hash160(QBT_DOWNGRADE_SCRIPT)    ? QBT_DOWNGRADE_SCRIPT
-               : $dg_sh eq hash160(QBT_DOWNGRADE_PQ_SCRIPT) ? QBT_DOWNGRADE_PQ_SCRIPT
+    my $redeem = $dg_sh eq hash160(QBT_DOWNGRADE_SCRIPT) ? QBT_DOWNGRADE_SCRIPT
                : return undef;
     my $txo = QBitcoin::TXO->new_saved({
         value      => $spv->{dg_value},
