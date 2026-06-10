@@ -27,10 +27,8 @@ use constant MAX_RECLAIM_PER_CYCLE => 10;
 # [ scripthash, redeem_script, reclaim_id length, relative time-lock seconds ]
 sub _reclaim_kinds {
     return (
-        [ hash160(QBT_FREEZE_SCRIPT),       QBT_FREEZE_SCRIPT,       20, DOWNGRADE_FREEZE_SEC ],
-        [ hash160(QBT_FREEZE_PQ_SCRIPT),    QBT_FREEZE_PQ_SCRIPT,    32, DOWNGRADE_FREEZE_SEC ],
-        [ hash160(QBT_DOWNGRADE_SCRIPT),    QBT_DOWNGRADE_SCRIPT,    20, DOWNGRADE_OUTPUT_SEC ],
-        [ hash160(QBT_DOWNGRADE_PQ_SCRIPT), QBT_DOWNGRADE_PQ_SCRIPT, 32, DOWNGRADE_OUTPUT_SEC ],
+        [ hash160(QBT_FREEZE_SCRIPT),    QBT_FREEZE_SCRIPT,    32, DOWNGRADE_FREEZE_SEC ],
+        [ hash160(QBT_DOWNGRADE_SCRIPT), QBT_DOWNGRADE_SCRIPT, 32, DOWNGRADE_OUTPUT_SEC ],
     );
 }
 
