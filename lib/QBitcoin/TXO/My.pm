@@ -11,7 +11,6 @@ use Role::Tiny;
 
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
-use QBitcoin::Crypto qw(hash160);
 # Call the registry functions fully qualified: Role::Tiny composes all subs
 # from the role package into the consumer, so importing them here would turn
 # them into QBitcoin::TXO methods
@@ -28,8 +27,8 @@ use QBitcoin::Wallet::UTXO ();
 my %RECLAIM_CSV_SEC;
 sub _reclaim_csv_sec {
     %RECLAIM_CSV_SEC = (
-        hash160(QBT_FREEZE_SCRIPT)    => DOWNGRADE_FREEZE_SEC,
-        hash160(QBT_DOWNGRADE_SCRIPT) => DOWNGRADE_OUTPUT_SEC,
+        QBT_FREEZE_SCRIPTHASH()    => DOWNGRADE_FREEZE_SEC,
+        QBT_DOWNGRADE_SCRIPTHASH() => DOWNGRADE_OUTPUT_SEC,
     ) unless %RECLAIM_CSV_SEC;
     return \%RECLAIM_CSV_SEC;
 }
