@@ -11,7 +11,7 @@ use QBitcoin::BlockchainParams;
 use QBitcoin::Log;
 use QBitcoin::IP qw(ip_port_str parse_addr_port host_to_ips);
 use QBitcoin::ORM qw(dbh);
-use QBitcoin::Crypto qw(pk_import pk_alg generate_keypair hash160);
+use QBitcoin::Crypto qw(pk_import pk_alg generate_keypair hash256);
 use QBitcoin::Block;
 use QBitcoin::Coins;
 use QBitcoin::Transaction;
@@ -585,8 +585,7 @@ sub cmd_sendrawtransaction {
     # Reject downgrade transactions (outputs to freeze address) when upgrade threshold reached
     if (my $best_block = QBitcoin::Block->best_block) {
         if (($best_block->upgraded // 0) >= UPGRADE_MAX_VALUE) {
-            my $freeze_sh = hash160(QBT_FREEZE_SCRIPT);
-            if (grep { ($_->scripthash // "") eq $freeze_sh } @{$tx->out}) {
+            if (grep { ($_->scripthash // "") eq QBT_FREEZE_SCRIPTHASH } @{$tx->out}) {
                 return $self->response_error("Conversion threshold reached, downgrade not accepted.", ERR_INVALID_REQUEST);
             }
         }
@@ -673,9 +672,8 @@ sub cmd_signrawtransactionwithkey {
     # downgrade never completes. A single hash256 reclaim_id serves EC and
     # post-quantum keys alike. Must happen before signing (it changes the outputs).
     {
-        my $freeze_sh = hash160(QBT_FREEZE_SCRIPT);
         for my $out (@{$tx->out}) {
-            next unless ($out->scripthash // "") eq $freeze_sh;
+            next unless ($out->scripthash // "") eq QBT_FREEZE_SCRIPTHASH;
             next unless length($out->data // "") >= 32 && substr($out->data, 0, 32) eq ("\x00" x 32);
             my $key = $address[0]
                 or return $self->response_error("No private key to fill downgrade reclaim_id", ERR_INVALID_REQUEST);
