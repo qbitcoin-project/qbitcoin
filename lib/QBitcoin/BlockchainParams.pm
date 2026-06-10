@@ -128,8 +128,9 @@ sub _reclaim_script {
 # spendable only by the system (QBT_LOCK_PUBKEY) and only in a TX_TYPE_DOWNGRADE:
 # this keeps grief pinning out (only the conversion service may move a freeze into a
 # downgrade). Otherwise the user reclaims their QBTC after DOWNGRADE_FREEZE_SEC.
-sub _freeze_if()        { OP_7 . OP_TX_TYPE . OP_EQUALVERIFY . chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
-sub QBT_FREEZE_SCRIPT() { state $qbt_freeze_script = _reclaim_script(_freeze_if(), DOWNGRADE_FREEZE_CSV, 32, OP_HASH256) }
+sub _freeze_if()            { OP_7 . OP_TX_TYPE . OP_EQUALVERIFY . chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
+sub QBT_FREEZE_SCRIPT()     { state $qbt_freeze_script = _reclaim_script(_freeze_if(), DOWNGRADE_FREEZE_CSV, 32, OP_HASH256) }
+sub QBT_FREEZE_SCRIPTHASH() { state $qbt_freeze_scripthash = hash160(QBT_FREEZE_SCRIPT) }
 
 # Downgrade-tx output script. The IF branch is permissionless: any node may spend
 # it in a TX_TYPE_BURN, no signature required. The burn's correctness (that the
@@ -137,7 +138,8 @@ sub QBT_FREEZE_SCRIPT() { state $qbt_freeze_script = _reclaim_script(_freeze_if(
 # validate_burn, not by a signature. Otherwise the user reclaims after
 # DOWNGRADE_OUTPUT_SEC.
 use constant _DOWNGRADE_IF => OP_6 . OP_TX_TYPE . OP_EQUALVERIFY . OP_1;
-use constant QBT_DOWNGRADE_SCRIPT => _reclaim_script(_DOWNGRADE_IF, DOWNGRADE_OUTPUT_CSV, 32, OP_HASH256);
+use constant QBT_DOWNGRADE_SCRIPT     => _reclaim_script(_DOWNGRADE_IF, DOWNGRADE_OUTPUT_CSV, 32, OP_HASH256);
+use constant QBT_DOWNGRADE_SCRIPTHASH => hash160(QBT_DOWNGRADE_SCRIPT);
 
 use Exporter 'import';
 our @EXPORT = (
@@ -147,7 +149,9 @@ our @EXPORT = (
     'QBT_BURN_LEN',
     'QBT_LOCK_SCRIPT',
     'QBT_FREEZE_SCRIPT',
+    'QBT_FREEZE_SCRIPTHASH',
     'QBT_DOWNGRADE_SCRIPT',
+    'QBT_DOWNGRADE_SCRIPTHASH',
 );
 
 1;
