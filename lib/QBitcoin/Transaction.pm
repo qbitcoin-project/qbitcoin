@@ -40,10 +40,9 @@ with 'QBitcoin::Transaction::Signature';
 use constant QBT_BURN_SCRIPTHASH => hash160(QBT_BURN_SCRIPT);
 
 # Trustless-downgrade script hashes, precomputed once.
-use constant QBT_FREEZE_SCRIPTHASH       => hash160(QBT_FREEZE_SCRIPT);
-use constant QBT_FREEZE_PQ_SCRIPTHASH    => hash160(QBT_FREEZE_PQ_SCRIPT);
-use constant QBT_DOWNGRADE_SCRIPTHASH    => hash160(QBT_DOWNGRADE_SCRIPT);
-use constant QBT_DOWNGRADE_PQ_SCRIPTHASH => hash160(QBT_DOWNGRADE_PQ_SCRIPT);
+use constant QBT_FREEZE_SCRIPTHASH    => hash160(QBT_FREEZE_SCRIPT);
+use constant QBT_DOWNGRADE_SCRIPTHASH => hash160(QBT_DOWNGRADE_SCRIPT);
+use constant QBT_RECLAIM_ID_LEN       => 32;   # reclaim_id = hash256(pubkey)
 
 use constant FIELDS => {
     id           => NUMERIC, # db primary key for reference links
@@ -796,8 +795,8 @@ sub output_as_hashref {
     # Show the Bitcoin destination address (so decoderawtransaction mirrors what
     # createrawtransaction accepted) and the reclaim status.
     my $sh = $out->scripthash // "";
-    if ($sh eq QBT_FREEZE_SCRIPTHASH || $sh eq QBT_FREEZE_PQ_SCRIPTHASH) {
-        my $rlen = $sh eq QBT_FREEZE_SCRIPTHASH ? 20 : 32;
+    if ($sh eq QBT_FREEZE_SCRIPTHASH) {
+        my $rlen = QBT_RECLAIM_ID_LEN;
         my $data = $out->data // "";
         if (length($data) > $rlen) {
             my $reclaim_id = substr($data, 0, $rlen);
@@ -1402,10 +1401,8 @@ sub validate_downgrade {
     };
     my $txo = $self->in->[0]{txo};
     my $sh  = $txo->scripthash // "";
-    my ($reclaim_len, $out_sh);
-    if    ($sh eq QBT_FREEZE_SCRIPTHASH)    { $reclaim_len = 20; $out_sh = QBT_DOWNGRADE_SCRIPTHASH;    }
-    elsif ($sh eq QBT_FREEZE_PQ_SCRIPTHASH) { $reclaim_len = 32; $out_sh = QBT_DOWNGRADE_PQ_SCRIPTHASH; }
-    else {
+    my ($reclaim_len, $out_sh) = (QBT_RECLAIM_ID_LEN, QBT_DOWNGRADE_SCRIPTHASH);
+    unless ($sh eq QBT_FREEZE_SCRIPTHASH) {
         Warningf("Downgrade transaction %s input is not a freeze output", $self->hash_str);
         return -1;
     }
@@ -1470,7 +1467,7 @@ sub validate_burn {
     };
     my $txo = $self->in->[0]{txo};
     my $sh  = $txo->scripthash // "";
-    unless ($sh eq QBT_DOWNGRADE_SCRIPTHASH || $sh eq QBT_DOWNGRADE_PQ_SCRIPTHASH) {
+    unless ($sh eq QBT_DOWNGRADE_SCRIPTHASH) {
         Warningf("Burn transaction %s input is not a downgrade output", $self->hash_str);
         return -1;
     }

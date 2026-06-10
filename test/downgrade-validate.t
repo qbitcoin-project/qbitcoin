@@ -26,7 +26,7 @@ my $txmod = Test::MockModule->new('QBitcoin::Transaction');
 $txmod->mock('check_input_script', sub { 0 });
 
 my $spk        = "\x76\xa9\x14" . ("\xab" x 20) . "\x88\xac";
-my $reclaim_id = "\x11" x 20;            # EC user identity
+my $reclaim_id = "\x11" x 32;            # user identity (hash256)
 my $V          = 100 * DENOMINATOR;      # qbtc value being downgraded
 my $floor      = downgrade_net($V);
 
@@ -56,7 +56,7 @@ is(dg_tx()->validate_downgrade, 0, "valid downgrade passes");
 
 is(dg_tx(down => commit(btc_value => $floor - 1))->validate_downgrade, -1, "btc_value below floor fails");
 is(dg_tx(down => commit(scriptpubkey => "\x00" x 25))->validate_downgrade, -1, "scriptpubkey != freeze destination fails");
-is(dg_tx(out => QBitcoin::TXO->new_txo(value => $V, scripthash => QBitcoin::Transaction::QBT_DOWNGRADE_SCRIPTHASH, data => "\x22" x 20))->validate_downgrade, -1,
+is(dg_tx(out => QBitcoin::TXO->new_txo(value => $V, scripthash => QBitcoin::Transaction::QBT_DOWNGRADE_SCRIPTHASH, data => "\x22" x 32))->validate_downgrade, -1,
     "output reclaim_id mismatch fails");
 is(dg_tx(out => QBitcoin::TXO->new_txo(value => $V - 1, scripthash => QBitcoin::Transaction::QBT_DOWNGRADE_SCRIPTHASH, data => $reclaim_id))->validate_downgrade, -1,
     "output value != input fails");
