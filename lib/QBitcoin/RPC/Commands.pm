@@ -584,8 +584,8 @@ sub cmd_sendrawtransaction {
     # Reject downgrade transactions (outputs to freeze address) when upgrade threshold reached
     if (my $best_block = QBitcoin::Block->best_block) {
         if (($best_block->upgraded // 0) >= UPGRADE_MAX_VALUE) {
-            my %freeze_sh = map { $_ => 1 } (hash160(QBT_FREEZE_SCRIPT), hash160(QBT_FREEZE_PQ_SCRIPT));
-            if (grep { $freeze_sh{$_->scripthash // ""} } @{$tx->out}) {
+            my $freeze_sh = hash160(QBT_FREEZE_SCRIPT);
+            if (grep { ($_->scripthash // "") eq $freeze_sh } @{$tx->out}) {
                 return $self->response_error("Conversion threshold reached, downgrade not accepted.", ERR_INVALID_REQUEST);
             }
         }
@@ -668,19 +668,17 @@ sub cmd_signrawtransactionwithkey {
     my @address = map { QBitcoin::MyAddress->new(private_key => $_, deleg_pubkeyhash => wif_delegation_hash($_)) } @$privkeys;
 
     # Fill the reclaim_id sentinel of any downgrade freeze output with the first
-    # signing key's pubkeyhash, so the user can later reclaim the QBTC if the
-    # downgrade never completes. Must happen before signing (it changes the outputs).
+    # signing key's pubkey hash256, so the user can later reclaim the QBTC if the
+    # downgrade never completes. A single hash256 reclaim_id serves EC and
+    # post-quantum keys alike. Must happen before signing (it changes the outputs).
     {
-        my $freeze_ec_sh = hash160(QBT_FREEZE_SCRIPT);
+        my $freeze_sh = hash160(QBT_FREEZE_SCRIPT);
         for my $out (@{$tx->out}) {
-            next unless ($out->scripthash // "") eq $freeze_ec_sh;
-            next unless length($out->data // "") >= 20 && substr($out->data, 0, 20) eq ("\x00" x 20);
+            next unless ($out->scripthash // "") eq $freeze_sh;
+            next unless length($out->data // "") >= 32 && substr($out->data, 0, 32) eq ("\x00" x 32);
             my $key = $address[0]
                 or return $self->response_error("No private key to fill downgrade reclaim_id", ERR_INVALID_REQUEST);
-            if (grep { $_ & CRYPT_ALGO_POSTQUANTUM } $key->algo) {
-                return $self->response_error("Downgrade reclaim defaults to EC; a post-quantum reclaim key is not supported here", ERR_INVALID_REQUEST);
-            }
-            $out->{data} = hash160($key->pubkey) . substr($out->data, 20);
+            $out->{data} = hash256($key->pubkey) . substr($out->data, 32);
         }
     }
 
