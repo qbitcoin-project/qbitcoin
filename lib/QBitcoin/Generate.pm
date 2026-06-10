@@ -13,7 +13,6 @@ use QBitcoin::Block;
 use QBitcoin::RedeemScript;
 use QBitcoin::TXO;
 use QBitcoin::Coinbase;
-use QBitcoin::Downgrade::Reclaim;
 use QBitcoin::Downgrade::Spv;
 use QBitcoin::Downgrade::Burn;
 use QBitcoin::Address qw(scripthash_by_address);
@@ -25,6 +24,8 @@ use QBitcoin::Crypto qw(hash256);
 use QBitcoin::Slashing;
 use QBitcoin::ValueUpgraded qw(level_by_total);
 use QBitcoin::Utils qw(get_address_utxo);
+use QBitcoin::Crypto qw(hash160 hash256);
+use QBitcoin::Address qw(address_by_hash);
 use QBitcoin::Generate::Control;
 
 sub load_utxo {
@@ -68,6 +69,40 @@ sub load_address_utxo {
         }
     }
     Infof("My UTXO for %s loaded, found %u with amount %lu", $my_address->address, $count, $value);
+    # Reclaim outputs are owned by a wallet pubkey; delegations and watch-only
+    # rows without a stored pubkey have none to look for
+    if ($my_address->can('pubkey') && defined(eval { $my_address->pubkey })) {
+        $class->load_reclaim_utxo($my_address);
+    }
+}
+
+# Load our trustless-downgrade reclaim outputs (freeze / downgrade-output scripts)
+# as ordinary My UTXOs. They live at a shared protocol scripthash and are ours by
+# reclaim_id = hash256(pubkey) in the output data, so we pick them out with the
+# SQL-level data filter of get_address_utxo. All maturities are loaded; the CSV
+# time-lock is applied at the point of use (staking / balance / listunspent) via
+# is_immature_reclaim, so an output becomes visible automatically once it matures.
+sub load_reclaim_utxo {
+    my $class = shift;
+    my ($my_address) = @_;
+    my $reclaim_id = hash256($my_address->pubkey);
+    foreach my $scripthash (hash160(QBT_FREEZE_SCRIPT), hash160(QBT_DOWNGRADE_SCRIPT)) {
+        my $chain_utxo = get_address_utxo(address_by_hash($scripthash), undef, $reclaim_id);
+        foreach my $txid (keys %$chain_utxo) {
+            for (my $vout = @{$chain_utxo->{$txid}} - 1; $vout >= 0; $vout--) {
+                my $u = $chain_utxo->{$txid}->[$vout] // next;
+                my $txo = QBitcoin::TXO->new_saved({
+                    tx_in      => $txid,
+                    num        => $vout,
+                    value      => $u->{value},
+                    scripthash => $scripthash,
+                    data       => $u->{data} // "",
+                });
+                next unless $txo->unspent;
+                $txo->add_my_utxo();
+            }
+        }
+    }
 }
 
 sub generated_time {
@@ -208,6 +243,11 @@ sub make_out_union {
 
 sub make_stake_tx {
     my ($reward, $block_sign_data, $timeslot, $prev_height) = @_;
+    # Skip reclaim outputs still inside their CSV time-lock: spending one before it
+    # matures would make the stake transaction invalid. Maturity is judged against
+    # the block's timeslot (the same reference valid_for_block uses) — NOT wall-clock
+    # time() — so generating a block for a past timeslot, or a clock jump, can't pull
+    # in an output that is not yet mature as of that block.
     # Exclude UTXOs we have already published a stake with in this timeslot: re-using
     # them would self-equivocate. The free (still-unused) UTXOs remain available, so in
     # "separate" reward mode a later call can build a second, independent stake with a
@@ -221,6 +261,7 @@ sub make_stake_tx {
     # slashed node must stop staking these coins instead of building invalid blocks.
     my @my_txo = grep {
         QBitcoin::Transaction->txo_stakeable($_) && txo_confirmed($_, $prev_height)
+            && !$_->is_immature_reclaim($timeslot)
             && !QBitcoin::Generate::Control->is_utxo_published($timeslot, $_->key)
     } QBitcoin::TXO->staked_utxo();
     my $reward_to = $config->{reward_to} // "union";
@@ -459,8 +500,6 @@ sub _generate {
         # Create new coinbase transaction and add it to mempool (if it's not there)
         QBitcoin::Transaction->new_coinbase($coinbase, $upgrade_level);
     }
-    # Auto-reclaim trustless-downgrade outputs whose time-lock has elapsed.
-    QBitcoin::Downgrade::Reclaim->scan_and_reclaim($time);
     # Generate burn transactions for downgrade payments confirmed on the BTC chain.
     QBitcoin::Downgrade::Burn->generate_burns($timeslot);
     my $prev_height = $prev_block ? $prev_block->height : -1;

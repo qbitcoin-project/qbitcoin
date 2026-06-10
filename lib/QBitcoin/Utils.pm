@@ -20,6 +20,7 @@ our @EXPORT_OK = qw(
     create_txo
     estimate_fees
     check_tx_tokens_balance
+    get_address_reclaim_utxo
 );
 
 use List::Util qw(sum0);
@@ -27,12 +28,13 @@ use QBitcoin::Log;
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
 use QBitcoin::ORM qw(dbh DEBUG_ORM);
-use QBitcoin::Address qw(scripthash_by_address);
-use QBitcoin::Crypto qw(hash160);
+use QBitcoin::Address qw(scripthash_by_address address_by_hash);
+use QBitcoin::Crypto qw(hash160 hash256);
 use QBitcoin::RedeemScript;
 use QBitcoin::TXO;
 use QBitcoin::Transaction;
 use QBitcoin::Block;
+use QBitcoin::MyAddress;
 use QBitcoin::MinFee qw(MIN_FEE);
 use QBitcoin::ProtocolState qw(blockchain_synced mempool_synced);
 use Bitcoin::Address qw(is_btc_address btc_address_to_scriptpubkey);
@@ -351,14 +353,23 @@ sub _add_token_data {
 }
 
 sub get_address_utxo {
-    my ($address, $limit) = @_;
+    # $data_prefix (optional): keep only outputs whose data begins with these bytes.
+    # Used to pick out our own trustless-downgrade reclaim outputs (reclaim_id =
+    # hash256(pubkey)) from the shared freeze/downgrade scripthash, filtered in SQL.
+    my ($address, $limit, $data_prefix) = @_;
     my $scripthash = eval { scripthash_by_address($address) }
         or return ();
     my %txo_chain;
     my $txo_cnt = 0;
+    my ($data_filter, @data_param) = ("");
+    if (defined $data_prefix && length $data_prefix) {
+        # HEX(SUBSTR(...)) is portable across SQLite and MySQL and avoids binary binds.
+        $data_filter = " AND HEX(SUBSTR(data, 1, ?)) = ?";
+        @data_param = (length($data_prefix), uc unpack("H*", $data_prefix));
+    }
     if (my $script = QBitcoin::RedeemScript->find(hash => $scripthash)) {
         my %token_hash;
-        foreach my $txo (dbh->selectall_array("SELECT tx_in.hash, num, value, tx_in.block_height, tx_in.block_pos, tx_in.tx_type, tx_in.id, tx_in.token_id, data FROM `" . QBitcoin::TXO->TABLE . "` JOIN `" . QBitcoin::Transaction->TABLE . "` tx_in ON (tx_in = tx_in.id) WHERE tx_out IS NULL AND scripthash = ? ORDER BY tx_in.block_height DESC, tx_in.block_pos DESC LIMIT ?", undef, $script->id, $limit // MAX_TXO_PER_ADDRESS)) {
+        foreach my $txo (dbh->selectall_array("SELECT tx_in.hash, num, value, tx_in.block_height, tx_in.block_pos, tx_in.tx_type, tx_in.id, tx_in.token_id, data FROM `" . QBitcoin::TXO->TABLE . "` JOIN `" . QBitcoin::Transaction->TABLE . "` tx_in ON (tx_in = tx_in.id) WHERE tx_out IS NULL AND scripthash = ?$data_filter ORDER BY tx_in.block_height DESC, tx_in.block_pos DESC LIMIT ?", undef, $script->id, @data_param, $limit // MAX_TXO_PER_ADDRESS)) {
             my $utxo = {
                 value        => $txo->[2],
                 block_height => $txo->[3],
@@ -395,6 +406,7 @@ sub get_address_utxo {
             for (my $num = 0; $num < @{$tx->out}; $num++) {
                 my $out = $tx->out->[$num];
                 next if $out->scripthash ne $scripthash;
+                next if @data_param && substr($out->data // "", 0, length $data_prefix) ne $data_prefix;
                 next unless $out->unspent;
                 my $utxo = {
                     value        => $out->value,
@@ -423,6 +435,7 @@ sub get_address_utxo {
         for (my $num = 0; $num < @{$tx->out}; $num++) {
             my $out = $tx->out->[$num];
             next if $out->scripthash ne $scripthash;
+            next if @data_param && substr($out->data // "", 0, length $data_prefix) ne $data_prefix;
             next unless $out->unspent;
             my $utxo = { value => $out->value, tx_type => $tx->type_as_text };
             $utxo->{data} = $out->data if defined $out->data;
@@ -446,6 +459,40 @@ sub get_address_utxo {
     }
 
     return wantarray ? (\%txo_chain, \%txo_mempool) : \%txo_chain;
+}
+
+# Mature trustless-downgrade reclaim outputs owned by $address (when it is one of
+# ours — they are identified by reclaim_id = hash256(pubkey) in the output data, so
+# we need the key to know they are ours), returned in the get_address_utxo chain
+# format so they can be surfaced under the owner's own address. Outputs still inside
+# their CSV time-lock are omitted: from our point of view those coins have left.
+sub get_address_reclaim_utxo {
+    my ($address) = @_;
+    my $scripthash = eval { scripthash_by_address($address) }
+        or return {};
+    my $my_address = QBitcoin::MyAddress->get_by_hash($scripthash, 0)
+        or return {};
+    my $reclaim_id = hash256($my_address->pubkey);
+    my $now = time();
+    my %result;
+    foreach my $kind (
+        [ hash160(QBT_FREEZE_SCRIPT),    DOWNGRADE_FREEZE_SEC ],
+        [ hash160(QBT_DOWNGRADE_SCRIPT), DOWNGRADE_OUTPUT_SEC ],
+    ) {
+        my ($sh, $csv_sec) = @$kind;
+        my $chain = get_address_utxo(address_by_hash($sh), undef, $reclaim_id);
+        foreach my $txid (keys %$chain) {
+            for (my $vout = @{$chain->{$txid}} - 1; $vout >= 0; $vout--) {
+                my $u = $chain->{$txid}->[$vout] // next;
+                my $bh = $u->{block_height} // next;   # confirmed outputs only
+                my $block = QBitcoin::Block->best_block($bh) // QBitcoin::Block->find(height => $bh)
+                    // next;
+                next unless $block->time + $csv_sec <= $now;   # mature (reclaimable) only
+                $result{$txid}->[$vout] = $u;
+            }
+        }
+    }
+    return \%result;
 }
 
 sub _unpack_data_value {

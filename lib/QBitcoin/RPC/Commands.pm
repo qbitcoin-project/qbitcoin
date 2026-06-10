@@ -31,7 +31,7 @@ use QBitcoin::Generate::Control;
 use QBitcoin::Protocol;
 use QBitcoin::Peer;
 use QBitcoin::ConnectionList;
-use QBitcoin::Utils qw(get_address_txs get_address_utxo address_received address_balance tokens_balance tokens_received get_tokens_info create_txo estimate_fees check_tx_tokens_balance);
+use QBitcoin::Utils qw(get_address_txs get_address_utxo get_address_reclaim_utxo address_received address_balance tokens_balance tokens_received get_tokens_info create_txo estimate_fees check_tx_tokens_balance);
 use Bitcoin::Serialized;
 use Bitcoin::Block;
 
@@ -1967,6 +1967,14 @@ sub cmd_listunspent {
     my ($chain_utxo, $mempool_utxo) = get_address_utxo($address);
     $chain_utxo
         or return $self->response_error("Too many transactions on this address", ERR_INTERNAL_ERROR);
+    # Surface our matured trustless-downgrade reclaim outputs under this address too.
+    my $reclaim_utxo = get_address_reclaim_utxo($address);
+    foreach my $txid (keys %$reclaim_utxo) {
+        for my $vout (0 .. $#{$reclaim_utxo->{$txid}}) {
+            my $u = $reclaim_utxo->{$txid}->[$vout] // next;
+            $chain_utxo->{$txid}->[$vout] = $u;
+        }
+    }
     my $best_height = QBitcoin::Block->blockchain_height
         or return $self->response_ok([]);
     my @utxo;
@@ -2212,7 +2220,11 @@ sub cmd_getbalance {
     my $self = shift;
     blockchain_synced() && mempool_synced()
         or return $self->response_error("Blockchain is not synced", ERR_INTERNAL_ERROR);
-    my @my_txo = QBitcoin::TXO->my_utxo();
+    # Hide reclaim outputs still inside their CSV time-lock: from our point of view
+    # the coins have left (the expected path is downgrade+burn → BTC); they only
+    # reappear here as a refund if the conversion never completes.
+    my $now = time();
+    my @my_txo = grep { !$_->is_immature_reclaim($now) } QBitcoin::TXO->my_utxo();
     my $minconf = $self->args->[0] // 1;
     my $value = 0;
     if ($minconf) {
