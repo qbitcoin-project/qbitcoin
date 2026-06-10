@@ -24,7 +24,7 @@ use QBitcoin::Crypto qw(hash256);
 use QBitcoin::Slashing;
 use QBitcoin::ValueUpgraded qw(level_by_total);
 use QBitcoin::Utils qw(get_address_utxo);
-use QBitcoin::Crypto qw(hash160 hash256);
+use QBitcoin::Crypto qw(hash256);
 use QBitcoin::Address qw(address_by_hash);
 use QBitcoin::Generate::Control;
 
@@ -86,7 +86,7 @@ sub load_reclaim_utxo {
     my $class = shift;
     my ($my_address) = @_;
     my $reclaim_id = hash256($my_address->pubkey);
-    foreach my $scripthash (hash160(QBT_FREEZE_SCRIPT), hash160(QBT_DOWNGRADE_SCRIPT)) {
+    foreach my $scripthash (QBT_FREEZE_SCRIPTHASH, QBT_DOWNGRADE_SCRIPTHASH) {
         my $chain_utxo = get_address_utxo(address_by_hash($scripthash), undef, $reclaim_id);
         foreach my $txid (keys %$chain_utxo) {
             for (my $vout = @{$chain_utxo->{$txid}} - 1; $vout >= 0; $vout--) {

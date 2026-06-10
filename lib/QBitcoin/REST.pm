@@ -585,9 +585,8 @@ sub wallet_tx_create {
     # never completes (mirrors signrawtransactionwithkey). Must run before signing:
     # it changes the outputs, which the input signatures commit to.
     {
-        my $freeze_sh = hash160(QBT_FREEZE_SCRIPT);
         my @freeze_outs = grep {
-            ($_->scripthash // "") eq $freeze_sh
+            ($_->scripthash // "") eq QBT_FREEZE_SCRIPTHASH
                 && length($_->data // "") >= 32 && substr($_->data, 0, 32) eq ("\x00" x 32)
         } @{$tx->out};
         if (@freeze_outs) {
