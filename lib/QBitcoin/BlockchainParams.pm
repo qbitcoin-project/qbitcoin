@@ -121,23 +121,23 @@ sub _reclaim_script {
         OP_ENDIF;
 }
 
-# Freeze deposit scripts (one constant address per signature class). data =
-# [hash160/hash256(user_pubkey)][btc scriptPubKey]. The IF branch is spendable only
-# by the system (QBT_LOCK_PUBKEY) and only in a TX_TYPE_DOWNGRADE: this keeps grief
-# pinning out (only the conversion service may move a freeze into a downgrade).
-# Otherwise the user reclaims their QBTC after DOWNGRADE_FREEZE_SEC.
-sub _freeze_if()           { OP_7 . OP_TX_TYPE . OP_EQUALVERIFY . chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
-sub QBT_FREEZE_SCRIPT()    { state $qbt_freeze_script    = _reclaim_script(_freeze_if(), DOWNGRADE_FREEZE_CSV, 20, OP_HASH160) }
-sub QBT_FREEZE_PQ_SCRIPT() { state $qbt_freeze_pq_script = _reclaim_script(_freeze_if(), DOWNGRADE_FREEZE_CSV, 20, OP_HASH256) }
+# Freeze deposit script (one constant address). data = [hash256(user_pubkey)][btc
+# scriptPubKey]. reclaim_id is always hash256(pubkey): a single script serves both
+# EC and post-quantum reclaim keys (OP_CHECKSIG dispatches on the signature class,
+# and the key store indexes pubkeys by both hash160 and hash256). The IF branch is
+# spendable only by the system (QBT_LOCK_PUBKEY) and only in a TX_TYPE_DOWNGRADE:
+# this keeps grief pinning out (only the conversion service may move a freeze into a
+# downgrade). Otherwise the user reclaims their QBTC after DOWNGRADE_FREEZE_SEC.
+sub _freeze_if()        { OP_7 . OP_TX_TYPE . OP_EQUALVERIFY . chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
+sub QBT_FREEZE_SCRIPT() { state $qbt_freeze_script = _reclaim_script(_freeze_if(), DOWNGRADE_FREEZE_CSV, 32, OP_HASH256) }
 
-# Downgrade-tx output scripts. The IF branch is permissionless: any node may spend
+# Downgrade-tx output script. The IF branch is permissionless: any node may spend
 # it in a TX_TYPE_BURN, no signature required. The burn's correctness (that the
 # committed BTC payment really happened) is enforced by the SPV proof in
 # validate_burn, not by a signature. Otherwise the user reclaims after
 # DOWNGRADE_OUTPUT_SEC.
 use constant _DOWNGRADE_IF => OP_6 . OP_TX_TYPE . OP_EQUALVERIFY . OP_1;
-use constant QBT_DOWNGRADE_SCRIPT    => _reclaim_script(_DOWNGRADE_IF, DOWNGRADE_OUTPUT_CSV, 20, OP_HASH160);
-use constant QBT_DOWNGRADE_PQ_SCRIPT => _reclaim_script(_DOWNGRADE_IF, DOWNGRADE_OUTPUT_CSV, 32, OP_HASH256);
+use constant QBT_DOWNGRADE_SCRIPT => _reclaim_script(_DOWNGRADE_IF, DOWNGRADE_OUTPUT_CSV, 32, OP_HASH256);
 
 use Exporter 'import';
 our @EXPORT = (
@@ -147,9 +147,7 @@ our @EXPORT = (
     'QBT_BURN_LEN',
     'QBT_LOCK_SCRIPT',
     'QBT_FREEZE_SCRIPT',
-    'QBT_FREEZE_PQ_SCRIPT',
     'QBT_DOWNGRADE_SCRIPT',
-    'QBT_DOWNGRADE_PQ_SCRIPT',
 );
 
 1;
