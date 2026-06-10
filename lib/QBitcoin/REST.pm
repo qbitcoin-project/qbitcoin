@@ -580,6 +580,25 @@ sub wallet_tx_create {
         return $self->http_response(400, "Tokens balance check failed: $token_err");
     }
 
+    # Fill the reclaim_id sentinel of any downgrade freeze output with the first
+    # input's pubkey hash256, so the freeze stays reclaimable if the downgrade
+    # never completes (mirrors signrawtransactionwithkey). Must run before signing:
+    # it changes the outputs, which the input signatures commit to.
+    {
+        my $freeze_sh = hash160(QBT_FREEZE_SCRIPT);
+        my @freeze_outs = grep {
+            ($_->scripthash // "") eq $freeze_sh
+                && length($_->data // "") >= 32 && substr($_->data, 0, 32) eq ("\x00" x 32)
+        } @{$tx->out};
+        if (@freeze_outs) {
+            my $first_txo = $tx->in->[0]{txo};
+            my $address = $first_txo && QBitcoin::MyAddress->get_by_hash($first_txo->scripthash, 0)
+                or return $self->http_response(400, "No private key to fill downgrade reclaim_id");
+            my $reclaim_id = hash256($address->pubkey);
+            $_->{data} = $reclaim_id . substr($_->data, 32) for @freeze_outs;
+        }
+    }
+
     QBitcoin::Wallet->signing_available
         or return $self->http_response(409, "The wallet is locked; unlock it with walletunlock or enable staking in the web admin interface");
 
