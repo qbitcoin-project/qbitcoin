@@ -20,7 +20,6 @@ use strict;
 use QBitcoin::Log;
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
-use QBitcoin::Crypto qw(hash160);
 use QBitcoin::Downgrade;
 use QBitcoin::TXO;
 use QBitcoin::Transaction;
@@ -32,8 +31,8 @@ sub build_downgrade_tx {
     my ($freeze_txo, %args) = @_;
 
     my $sh = $freeze_txo->scripthash // "";
-    my ($reclaim_len, $freeze_script, $out_scripthash) = (32, QBT_FREEZE_SCRIPT, hash160(QBT_DOWNGRADE_SCRIPT));
-    unless ($sh eq hash160(QBT_FREEZE_SCRIPT)) {
+    my ($reclaim_len, $freeze_script, $out_scripthash) = (32, QBT_FREEZE_SCRIPT, QBT_DOWNGRADE_SCRIPTHASH);
+    unless ($sh eq QBT_FREEZE_SCRIPTHASH) {
         Errf("build_downgrade_tx: input is not a freeze output");
         return undef;
     }

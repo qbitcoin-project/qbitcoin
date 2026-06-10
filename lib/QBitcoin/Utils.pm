@@ -29,7 +29,7 @@ use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
 use QBitcoin::ORM qw(dbh DEBUG_ORM);
 use QBitcoin::Address qw(scripthash_by_address address_by_hash);
-use QBitcoin::Crypto qw(hash160 hash256);
+use QBitcoin::Crypto qw(hash256);
 use QBitcoin::RedeemScript;
 use QBitcoin::TXO;
 use QBitcoin::Transaction;
@@ -476,8 +476,8 @@ sub get_address_reclaim_utxo {
     my $now = time();
     my %result;
     foreach my $kind (
-        [ hash160(QBT_FREEZE_SCRIPT),    DOWNGRADE_FREEZE_SEC ],
-        [ hash160(QBT_DOWNGRADE_SCRIPT), DOWNGRADE_OUTPUT_SEC ],
+        [ QBT_FREEZE_SCRIPTHASH,    DOWNGRADE_FREEZE_SEC ],
+        [ QBT_DOWNGRADE_SCRIPTHASH, DOWNGRADE_OUTPUT_SEC ],
     ) {
         my ($sh, $csv_sec) = @$kind;
         my $chain = get_address_utxo(address_by_hash($sh), undef, $reclaim_id);
@@ -1009,7 +1009,7 @@ sub create_txo {
             $value =~ /^[0-9]+$/ && $value <= MAX_VALUE
                 or return undef;
             push @txo, {
-                scripthash => hash160(QBT_FREEZE_SCRIPT),
+                scripthash => QBT_FREEZE_SCRIPTHASH,
                 value      => $value,
                 data       => ("\x00" x 32) . $spk,
             };

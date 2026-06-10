@@ -20,8 +20,8 @@ use Role::Tiny;
 my %RECLAIM_SCRIPTS;
 sub _reclaim_scripts {
     %RECLAIM_SCRIPTS = (
-        hash160(QBT_FREEZE_SCRIPT)    => [ QBT_FREEZE_SCRIPT,    32 ],
-        hash160(QBT_DOWNGRADE_SCRIPT) => [ QBT_DOWNGRADE_SCRIPT, 32 ],
+        QBT_FREEZE_SCRIPTHASH()    => [ QBT_FREEZE_SCRIPT,    32 ],
+        QBT_DOWNGRADE_SCRIPTHASH() => [ QBT_DOWNGRADE_SCRIPT, 32 ],
     ) unless %RECLAIM_SCRIPTS;
     return \%RECLAIM_SCRIPTS;
 }
