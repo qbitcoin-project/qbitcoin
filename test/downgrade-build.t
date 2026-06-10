@@ -23,7 +23,7 @@ $config->{regtest} = 1;
 
 my $sys = QBitcoin::MyAddress->new(private_key => wallet_import_format(generate_keypair(CRYPT_ALGO_ECDSA)->pk_serialize));
 my $sys_pk = $sys->pubkey;
-my $reclaim_id = "\x11" x 20;
+my $reclaim_id = "\x11" x 32;
 my $spk = "\x76\xa9\x14" . ("\xcc" x 20) . "\x88\xac";
 my $V   = 100 * DENOMINATOR;
 
@@ -35,8 +35,8 @@ my $test_freeze =
     chr(length($sys_pk)) . $sys_pk . OP_CHECKSIG .
     OP_ELSE .
     chr(4) . pack("V", DOWNGRADE_FREEZE_CSV) . OP_CSV . OP_DROP .
-    OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr(20) . OP_SUBSTR .
-    OP_OVER . OP_HASH160 . OP_EQUALVERIFY . OP_CHECKSIG .
+    OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr(32) . OP_SUBSTR .
+    OP_OVER . OP_HASH256 . OP_EQUALVERIFY . OP_CHECKSIG .
     OP_ENDIF;
 
 # --- make_sign_freeze_if: system signs the IF branch of a downgrade ---
