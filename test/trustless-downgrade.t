@@ -30,6 +30,7 @@ my $sys_pk   = $sys_addr->pubkey;
 my $usr_addr = ec_address();
 my $usr_pk   = $usr_addr->pubkey;
 my $usr_h160 = hash160($usr_pk);
+my $usr_h256 = hash256($usr_pk);
 my $oth_addr = ec_address();
 my $oth_pk   = $oth_addr->pubkey;
 
@@ -119,16 +120,16 @@ sub make_reclaim_script {
     my $sd      = "reclaim_sign_data";
     my $sig_usr = signature($sd, $usr_addr, CRYPT_ALGO_ECDSA, SIGHASH_ALL);
     my $sig_oth = signature($sd, $oth_addr, CRYPT_ALGO_ECDSA, SIGHASH_ALL);
-    my $data    = $usr_h160 . "\x19\x76\xa9\x14" . ("\x11" x 20) . "\x88\xac"; # reclaim_id + dummy scriptPubKey tail
+    my $data    = $usr_h256 . "\x19\x76\xa9\x14" . ("\x11" x 20) . "\x88\xac"; # reclaim_id (32) + dummy scriptPubKey tail
     my $tx      = MockTx->new(tx_type => TX_TYPE_STANDARD, sign_data => $sd, data => $data);
 
     for my $case (
-        [ "freeze",           make_reclaim_script(freeze_if($sys_pk), DOWNGRADE_FREEZE_CSV), DOWNGRADE_FREEZE_SEC ],
-        [ "downgrade output", make_reclaim_script(DOWNGRADE_IF,        DOWNGRADE_OUTPUT_CSV), DOWNGRADE_OUTPUT_SEC ],
+        [ "freeze",           make_reclaim_script(freeze_if($sys_pk), DOWNGRADE_FREEZE_CSV, 1), DOWNGRADE_FREEZE_SEC ],
+        [ "downgrade output", make_reclaim_script(DOWNGRADE_IF,        DOWNGRADE_OUTPUT_CSV, 1), DOWNGRADE_OUTPUT_SEC ],
     ) {
         my ($name, $script, $sec) = @$case;
         ok( script_eval([$sig_usr, $usr_pk, ""], $script, $tx, 0), "$name ELSE: correct user passes");
-        ok(!script_eval([$sig_oth, $oth_pk, ""], $script, $tx, 0), "$name ELSE: wrong pubkey fails hash160 check");
+        ok(!script_eval([$sig_oth, $oth_pk, ""], $script, $tx, 0), "$name ELSE: wrong pubkey fails hash256 check");
         is($tx->in->[0]{min_rel_time}, $sec, "$name ELSE: time-based CSV sets min_rel_time");
         delete $tx->in->[0]{min_rel_time};
     }
@@ -140,7 +141,7 @@ sub make_reclaim_script {
 {
     my $sd      = "real_reclaim";
     my $sig_usr = signature($sd, $usr_addr, CRYPT_ALGO_ECDSA, SIGHASH_ALL);
-    my $data    = $usr_h160 . ("\x00" x 25);
+    my $data    = $usr_h256 . ("\x00" x 25);
     my $tx      = MockTx->new(tx_type => TX_TYPE_STANDARD, sign_data => $sd, data => $data);
     ok( script_eval([$sig_usr, $usr_pk, ""], QBT_FREEZE_SCRIPT, $tx, 0),
         "QBT_FREEZE_SCRIPT: user reclaim (ELSE) passes");
