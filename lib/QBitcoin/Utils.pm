@@ -952,10 +952,10 @@ sub create_txo {
         }
         elsif (is_btc_address($key)) {
             # Bitcoin address as destination: create a trustless-downgrade freeze
-            # output. data = [reclaim_id (20)][btc scriptPubKey]. The scriptPubKey is
+            # output. data = [reclaim_id (32)][btc scriptPubKey]. The scriptPubKey is
             # what the BTC payment must pay (any address format; consensus byte-compares
-            # it, never interprets it). reclaim_id is left as a 20-byte zero sentinel and
-            # filled with the first signing key's pubkeyhash at signrawtransactionwithkey.
+            # it, never interprets it). reclaim_id is left as a 32-byte zero sentinel and
+            # filled with the first signing key's pubkey hash256 at signrawtransactionwithkey.
             my $spk = btc_address_to_scriptpubkey($key)
                 or return undef;
             my $value = $out->{$key};
@@ -964,7 +964,7 @@ sub create_txo {
             push @txo, {
                 scripthash => hash160(QBT_FREEZE_SCRIPT),
                 value      => $value,
-                data       => ("\x00" x 20) . $spk,
+                data       => ("\x00" x 32) . $spk,
             };
         }
         elsif (my $scripthash = eval { scripthash_by_address($key) }) {

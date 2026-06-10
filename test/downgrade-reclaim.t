@@ -16,7 +16,7 @@ use QBitcoin::Downgrade::Reclaim;
 $config->{regtest} = 1;
 
 my $now        = 2_000_000_000;
-my $reclaim_id = "\x11" x 20;
+my $reclaim_id = "\x11" x 32;
 my $spk        = "\x76\xa9\x14" . ("\xcc" x 20) . "\x88\xac";
 my $data_hex   = unpack("H*", $reclaim_id . $spk);
 my $freeze_sh  = hash160(QBT_FREEZE_SCRIPT);

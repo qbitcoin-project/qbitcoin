@@ -182,14 +182,14 @@ my $fake_txid = "00" x 32;
 }
 
 # -----------------------------------------------------------------------
-# 4. Freeze1 input restriction
-#    A non-burn transaction that spends a freeze1 UTXO must be rejected
+# 4. Freeze input restriction
+#    A non-burn transaction that spends a freeze UTXO must be rejected
 #    by Transaction->validate().  A burn transaction must NOT be rejected
 #    by that specific check.
 # -----------------------------------------------------------------------
 {
-    # Build a freeze1 TXO (output locked to QBT_BURN_SCRIPT / QBT_BURN_SCRIPTHASH).
-    my $freeze1_txo = QBitcoin::TXO->new_txo(
+    # Build a freeze TXO (output locked to QBT_BURN_SCRIPT / QBT_BURN_SCRIPTHASH).
+    my $freeze_txo = QBitcoin::TXO->new_txo(
         tx_in         => "\x01" x 32,    # fake source tx hash (32 bytes)
         num           => 0,
         scripthash    => hash160(QBT_BURN_SCRIPT),
@@ -204,9 +204,9 @@ my $fake_txid = "00" x 32;
         num        => 0,
     );
 
-    # Standard (non-burn) transaction spending the freeze1 UTXO — must fail.
+    # Standard (non-burn) transaction spending the freeze UTXO — must fail.
     my $bad_tx = QBitcoin::Transaction->new(
-        in      => [ { txo => $freeze1_txo, siglist => [] } ],
+        in      => [ { txo => $freeze_txo, siglist => [] } ],
         out     => [ $out_txo ],
         tx_type => TX_TYPE_STANDARD,
         fee     => 0,
