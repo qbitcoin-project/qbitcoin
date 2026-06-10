@@ -32,10 +32,8 @@ sub build_downgrade_tx {
     my ($freeze_txo, %args) = @_;
 
     my $sh = $freeze_txo->scripthash // "";
-    my ($reclaim_len, $freeze_script, $out_scripthash);
-    if    ($sh eq hash160(QBT_FREEZE_SCRIPT))    { $reclaim_len = 20; $freeze_script = QBT_FREEZE_SCRIPT;    $out_scripthash = hash160(QBT_DOWNGRADE_SCRIPT);    }
-    elsif ($sh eq hash160(QBT_FREEZE_PQ_SCRIPT)) { $reclaim_len = 32; $freeze_script = QBT_FREEZE_PQ_SCRIPT; $out_scripthash = hash160(QBT_DOWNGRADE_PQ_SCRIPT); }
-    else {
+    my ($reclaim_len, $freeze_script, $out_scripthash) = (32, QBT_FREEZE_SCRIPT, hash160(QBT_DOWNGRADE_SCRIPT));
+    unless ($sh eq hash160(QBT_FREEZE_SCRIPT)) {
         Errf("build_downgrade_tx: input is not a freeze output");
         return undef;
     }
