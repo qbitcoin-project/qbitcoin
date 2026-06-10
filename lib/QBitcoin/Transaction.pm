@@ -39,10 +39,8 @@ with 'QBitcoin::Transaction::Signature';
 # string (ASCII) are downgrade requests; the address is shown by decoderawtransaction.
 use constant QBT_BURN_SCRIPTHASH => hash160(QBT_BURN_SCRIPT);
 
-# Trustless-downgrade script hashes, precomputed once.
-use constant QBT_FREEZE_SCRIPTHASH    => hash160(QBT_FREEZE_SCRIPT);
-use constant QBT_DOWNGRADE_SCRIPTHASH => hash160(QBT_DOWNGRADE_SCRIPT);
-use constant QBT_RECLAIM_ID_LEN       => 32;   # reclaim_id = hash256(pubkey)
+# QBT_FREEZE_SCRIPTHASH / QBT_DOWNGRADE_SCRIPTHASH come from QBitcoin::Const.
+use constant QBT_RECLAIM_ID_LEN => 32;   # reclaim_id = hash256(pubkey)
 
 use constant FIELDS => {
     id           => NUMERIC, # db primary key for reference links
