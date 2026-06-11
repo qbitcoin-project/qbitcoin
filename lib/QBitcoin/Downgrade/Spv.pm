@@ -1,6 +1,7 @@
 package QBitcoin::Downgrade::Spv;
 use warnings;
 use strict;
+use feature 'state';
 
 # BTC SPV proof of the payment for a downgrade (storage only).
 #
@@ -16,8 +17,10 @@ use Scalar::Util qw(weaken refaddr);
 use QBitcoin::Accessors qw(new mk_accessors);
 use QBitcoin::Log;
 use QBitcoin::Const;
+use QBitcoin::BlockchainParams;
 use QBitcoin::ORM qw(:types dbh fetch find create DEBUG_ORM);
 use QBitcoin::Crypto qw(hash256);
+use QBitcoin::RedeemScript;
 use Bitcoin::Block;
 
 use constant TABLE => 'downgrade_spv';
@@ -39,17 +42,24 @@ mk_accessors(keys %{&FIELDS});
 my %SPV; # short-lived cache of recently produced (not yet burned) entries
 
 # Map { committed_btc_txid => downgrade_tx_id } of pending downgrades whose BTC
-# payment has not been recorded yet (no SPV row). Read straight from the typed
-# commitment columns; rebuilt per BTC block (the set is small).
+# payment has not been recorded yet (no SPV row). Rebuilt per BTC block.
+#
+# Driven from the unspent downgrade-output set (scripthash + tx_out IS NULL) so the
+# cost scales with the number of *pending* downgrades, not with all downgrades ever:
+# the txo(tx_out, scripthash) index turns it into a direct seek. Driving from the
+# `downgrade` table instead would full-scan every downgrade ever made.
 sub pending_txids {
     my $class = shift;
+    state $script;
+    $script //= QBitcoin::RedeemScript->find(hash => QBT_DOWNGRADE_SCRIPTHASH)
+        or return {};
     my $sql =
-        "SELECT d.btc_txid, d.tx_id FROM `downgrade` AS d"
-      . " JOIN `txo` AS o ON (o.tx_in = d.tx_id AND o.num = 0)"
-      . " LEFT JOIN `" . TABLE . "` AS sv ON (sv.downgrade_tx_id = d.tx_id)"
-      . " WHERE o.tx_out IS NULL AND sv.downgrade_tx_id IS NULL";
+        "SELECT d.btc_txid, d.tx_id FROM `txo` AS o"
+      . " JOIN `downgrade` AS d ON (d.tx_id = o.tx_in)"
+      . " LEFT JOIN `" . TABLE . "` AS sv ON (sv.downgrade_tx_id = o.tx_in)"
+      . " WHERE o.scripthash = ? AND o.num = 0 AND o.tx_out IS NULL AND sv.downgrade_tx_id IS NULL";
     my $sth = dbh->prepare($sql);
-    $sth->execute();
+    $sth->execute($script->id);
     my %pending;
     while (my $row = $sth->fetchrow_hashref()) {
         $pending{$row->{btc_txid}} = $row->{tx_id};
