@@ -686,7 +686,7 @@ sub process_tx {
         if (blockchain_synced() && mempool_synced()) {
             # announce to other peers
             $tx->announce();
-            if ($tx->fee > 0 || $tx->up) {
+            if ($tx->fee > 0 || $tx->is_coinbase || $tx->is_burn) {
                 my $recv_peer = $tx->received_from_peer ? $tx->received_from->peer : undef;
                 if ($recv_peer) {
                     $recv_peer->add_reputation($tx->up ? 200 : 2);
