@@ -149,4 +149,8 @@ sub update_btc_stopped {
     }
 }
 
+sub reset_upgrade_stopped {
+    $upgrade_stopped_block = undef;
+}
+
 1;
