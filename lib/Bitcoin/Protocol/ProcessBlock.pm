@@ -74,6 +74,8 @@ sub process_btc_block {
                         # Drop not-yet-burned downgrade SPVs in the reverted range;
                         # confirmed burns keep their proof (rollback is a TODO, as for coinbase).
                         QBitcoin::Downgrade::Spv->delete_pending_above($start_block->height);
+                        Bitcoin::Block->reset_upgrade_stopped()
+                            if $revert_height >= UPGRADE_MAX_BLOCKS + COINBASE_CONFIRM_BLOCKS;
                     }
                     $revert_block->update(height => undef, $revert_block->time >= GENESIS_TIME ? (scanned => 0) : ());
                 }

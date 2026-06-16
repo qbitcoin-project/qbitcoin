@@ -27,18 +27,20 @@ $txmod->mock('check_input_script', sub { 0 });
 
 my $spk        = "\x76\xa9\x14" . ("\xab" x 20) . "\x88\xac";
 my $reclaim_id = "\x11" x 32;            # user identity (hash256)
+my $freeze_txid = "\xaa" x 32;
+my $freeze_vout = 0;
 my $V          = 100 * DENOMINATOR;      # qbtc value being downgraded
 my $floor      = downgrade_net($V);
 
 sub freeze_txo {
-    QBitcoin::TXO->new_txo(tx_in => "\xaa" x 32, num => 0, value => $V,
+    QBitcoin::TXO->new_txo(tx_in => $freeze_txid, num => $freeze_vout, value => $V,
         scripthash => QBitcoin::Transaction::QBT_FREEZE_SCRIPTHASH, data => $reclaim_id . $spk);
 }
 sub dg_out {
     QBitcoin::TXO->new_txo(value => $V,
         scripthash => QBitcoin::Transaction::QBT_DOWNGRADE_SCRIPTHASH, data => $reclaim_id);
 }
-sub commit { QBitcoin::Downgrade->new({ btc_txid => "\xcd" x 32, btc_vout => 0, btc_value => $floor, scriptpubkey => $spk, @_ }) }
+sub commit { QBitcoin::Downgrade->new({ freeze_txid => $freeze_txid, freeze_vout => $freeze_vout, btc_txid => "\xcd" x 32, btc_vout => 0, btc_value => $floor, scriptpubkey => $spk, @_ }) }
 
 sub dg_tx {
     my %o = @_;
@@ -56,6 +58,7 @@ is(dg_tx()->validate_downgrade, 0, "valid downgrade passes");
 
 is(dg_tx(down => commit(btc_value => $floor - 1))->validate_downgrade, -1, "btc_value below floor fails");
 is(dg_tx(down => commit(scriptpubkey => "\x00" x 25))->validate_downgrade, -1, "scriptpubkey != freeze destination fails");
+is(dg_tx(down => commit(freeze_vout => $freeze_vout + 1))->validate_downgrade, -1, "source freeze commitment mismatch fails");
 is(dg_tx(out => QBitcoin::TXO->new_txo(value => $V, scripthash => QBitcoin::Transaction::QBT_DOWNGRADE_SCRIPTHASH, data => "\x22" x 32))->validate_downgrade, -1,
     "output reclaim_id mismatch fails");
 is(dg_tx(out => QBitcoin::TXO->new_txo(value => $V - 1, scripthash => QBitcoin::Transaction::QBT_DOWNGRADE_SCRIPTHASH, data => $reclaim_id))->validate_downgrade, -1,
@@ -69,9 +72,12 @@ is(dg_tx(in => QBitcoin::TXO->new_txo(tx_in => "\xaa" x 32, num => 0, value => $
 
 # ----------------------- validate_burn -----------------------
 # Real (non-witness) BTC tx paying $spk; block with merkle_root = txid.
+my $marker = QBitcoin::Downgrade->downgrade_marker($freeze_txid, $freeze_vout);
+my $marker_script = "\x6a" . chr(length($marker)) . $marker;
 my $btc_tx =
     pack("V", 1) . "\x01" . ("\x00" x 32) . pack("V", 0) . "\x00" . "\xff\xff\xff\xff"
-  . "\x01" . pack("Q<", $floor) . chr(length($spk)) . $spk . pack("V", 0);
+  . "\x02" . pack("Q<", $floor) . chr(length($spk)) . $spk
+  . pack("Q<", 0) . chr(length($marker_script)) . $marker_script . pack("V", 0);
 my $txid      = hash256($btc_tx);
 my $blockhash = "\x77" x 32;
 my $block = Bitcoin::Block->new({ height => 100, time => time(), merkle_root => $txid,       hash => $blockhash });
@@ -86,7 +92,10 @@ $blkmod->mock('find', sub {
 });
 
 my $src_hash = "\xde" x 32;
-my $src_commit = QBitcoin::Downgrade->new({ btc_txid => $txid, btc_vout => 0, btc_value => $floor, scriptpubkey => $spk });
+my $src_commit = QBitcoin::Downgrade->new({
+    freeze_txid => $freeze_txid, freeze_vout => $freeze_vout,
+    btc_txid => $txid, btc_vout => 0, btc_value => $floor, scriptpubkey => $spk,
+});
 my $src_tx = QBitcoin::Transaction->new(tx_type => TX_TYPE_DOWNGRADE, down => $src_commit, hash => $src_hash);
 $txmod->mock('get', sub { my ($c, $h) = @_; return defined($h) && $h eq $src_hash ? $src_tx : undef });
 
