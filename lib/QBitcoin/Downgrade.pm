@@ -7,8 +7,9 @@ use strict;
 # Two transactions carry downgrade data:
 #
 #   TX_TYPE_DOWNGRADE  - the "commitment": spends the user's freeze output, pins
-#       the qbtc branch with heavy weight, and commits where/how much BTC must be
-#       paid. Fields: btc_txid, btc_vout, btc_value, scriptpubkey.
+#       the qbtc branch with heavy weight, commits which freeze output it serves,
+#       and commits where/how much BTC must be paid. Fields: freeze_txid,
+#       freeze_vout, btc_txid, btc_vout, btc_value, scriptpubkey.
 #
 #   TX_TYPE_BURN       - the "proof": spends the downgrade-tx output and carries a
 #       BTC SPV proof that the committed payment really happened, then finalizes
@@ -31,8 +32,18 @@ use Bitcoin::Serialized;
 use Bitcoin::Transaction;
 use Bitcoin::Block;
 
-mk_accessors(qw(btc_txid btc_vout btc_value scriptpubkey
+mk_accessors(qw(freeze_txid freeze_vout btc_txid btc_vout btc_value scriptpubkey
                 btc_block_hash btc_tx_num merkle_path btc_tx_data));
+
+use constant DOWNGRADE_MARKER_MAGIC   => "QDG1";
+use constant DOWNGRADE_MARKER_VERSION => 1;
+
+sub downgrade_marker {
+    my $class = shift;
+    my ($freeze_txid, $freeze_vout) = @_;
+    return DOWNGRADE_MARKER_MAGIC . pack("C", DOWNGRADE_MARKER_VERSION)
+        . $freeze_txid . pack("V", $freeze_vout);
+}
 
 # ---------------------------------------------------------------------------
 # Commitment payload (TX_TYPE_DOWNGRADE)
@@ -40,6 +51,8 @@ mk_accessors(qw(btc_txid btc_vout btc_value scriptpubkey
 sub serialize_commitment {
     my $self = shift;
     return
+        $self->freeze_txid .                       # 32 bytes, qbtc tx hash
+        varint($self->freeze_vout) .
         $self->btc_txid .                          # 32 bytes, internal byte order
         varint($self->btc_vout) .
         pack("Q<", $self->btc_value) .             # satoshis
@@ -49,11 +62,15 @@ sub serialize_commitment {
 sub deserialize_commitment {
     my $class = shift;
     my ($data) = @_;
+    my $freeze_txid  = $data->get(32)       // return undef;
+    my $freeze_vout  = $data->get_varint()  // return undef;
     my $btc_txid     = $data->get(32)       // return undef;
     my $btc_vout     = $data->get_varint()  // return undef;
     my $btc_value    = unpack("Q<", $data->get(8) // return undef);
     my $scriptpubkey = $data->get_string()  // return undef;
     return $class->new({
+        freeze_txid  => $freeze_txid,
+        freeze_vout  => $freeze_vout,
         btc_txid     => $btc_txid,
         btc_vout     => $btc_vout,
         btc_value    => $btc_value,
@@ -101,6 +118,7 @@ sub deserialize_proof {
 #   3. the merkle path proves the tx is in that block;
 #   4. output[commit->btc_vout].scriptPubKey == commit->scriptpubkey (byte equal);
 #   5. output[commit->btc_vout].value >= commit->btc_value.
+#   6. some OP_RETURN output commits the served qbtc freeze txid/vout.
 # ---------------------------------------------------------------------------
 sub validate_spv {
     my $self = shift;
@@ -159,7 +177,28 @@ sub validate_spv {
             $commit->btc_vout, $out->{value}, $commit->btc_value);
         return -1;
     }
+    my $marker = (ref($self) || $self)->downgrade_marker($commit->freeze_txid, $commit->freeze_vout);
+    unless (_tx_has_marker($btc_tx, $marker)) {
+        Warningf("BTC downgrade tx %s has no marker for freeze %s:%u",
+            $btc_tx->hash_hex, unpack("H*", $commit->freeze_txid), $commit->freeze_vout);
+        return -1;
+    }
 
+    return 0;
+}
+
+sub _tx_has_marker {
+    my ($btc_tx, $marker) = @_;
+    for my $out (@{$btc_tx->out}) {
+        my $script = $out->{open_script} // "";
+        next unless substr($script, 0, 1) eq "\x6a"; # OP_RETURN
+        # Bitcoin Core's createrawtransaction "data" output uses a direct push for
+        # our 41-byte marker. Keep consensus deliberately narrow here: only the
+        # service's canonical marker encoding proves linkage to this freeze.
+        next unless length($script) == length($marker) + 2;
+        next unless substr($script, 1, 1) eq chr(length($marker));
+        return 1 if substr($script, 2) eq $marker;
+    }
     return 0;
 }
 
