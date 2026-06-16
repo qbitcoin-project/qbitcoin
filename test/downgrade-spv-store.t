@@ -29,9 +29,11 @@ $dbh->do("INSERT INTO redeem_script (id,hash) VALUES (10, X'$dg_sh_hex')") or di
 sub add_downgrade_tx {
     my ($id, $btc_txid) = @_;
     my $btc_txid_hex = unpack("H*", $btc_txid);
+    my $freeze_txid_hex = sprintf("%02x", 0xf0 + $id) x 32;
     $dbh->do("INSERT INTO `transaction` (id,hash,block_height,block_pos,tx_type,size,fee) VALUES (?,?,1,?,?,10,0)",
         undef, $id, pack("C", 0xd0 + $id), $id, TX_TYPE_DOWNGRADE) or die $dbh->errstr;
-    $dbh->do("INSERT INTO `downgrade` (tx_id,btc_txid,btc_vout,btc_value,scriptpubkey) VALUES (?, X'$btc_txid_hex', 0, 5000, X'$spk_hex')",
+    $dbh->do("INSERT INTO `downgrade` (tx_id,freeze_txid,freeze_vout,btc_txid,btc_vout,btc_value,scriptpubkey)"
+           . " VALUES (?, X'$freeze_txid_hex', 0, X'$btc_txid_hex', 0, 5000, X'$spk_hex')",
         undef, $id) or die $dbh->errstr;
     $dbh->do("INSERT INTO txo (value,num,tx_in,tx_out,scripthash,data) VALUES (1000,0,?,NULL,10,X'1100')", undef, $id) or die $dbh->errstr;
 }

@@ -44,7 +44,10 @@ my $test_freeze =
     my $freeze_txo = QBitcoin::TXO->new_txo(tx_in => "\xaa" x 32, num => 0, value => $V,
         scripthash => hash160($test_freeze), data => $reclaim_id . $spk);
     my $out = QBitcoin::TXO->new_txo(value => $V, scripthash => hash160(QBT_DOWNGRADE_SCRIPT), data => $reclaim_id);
-    my $commit = QBitcoin::Downgrade->new({ btc_txid => "\xcd" x 32, btc_vout => 0, btc_value => $V, scriptpubkey => $spk });
+    my $commit = QBitcoin::Downgrade->new({
+        freeze_txid => $freeze_txo->tx_in, freeze_vout => $freeze_txo->num,
+        btc_txid => "\xcd" x 32, btc_vout => 0, btc_value => $V, scriptpubkey => $spk,
+    });
     my $tx = QBitcoin::Transaction->new(in => [{ txo => $freeze_txo }], out => [$out],
         tx_type => TX_TYPE_DOWNGRADE, fee => 0, down => $commit, hash => "\x01" x 32);
 
@@ -72,6 +75,8 @@ my $test_freeze =
     ok($tx, "build_downgrade_tx returns a transaction");
     ok($tx->is_downgrade, "tx_type is DOWNGRADE");
     is($tx->fee, 0, "zero fee");
+    is($tx->down->freeze_txid,  "\xbb" x 32, "commitment freeze_txid");
+    is($tx->down->freeze_vout,  0,           "commitment freeze_vout");
     is($tx->down->btc_txid,     "\xee" x 32, "commitment btc_txid");
     is($tx->down->btc_vout,     3,           "commitment btc_vout");
     is($tx->down->btc_value,    99_000,      "commitment btc_value");
