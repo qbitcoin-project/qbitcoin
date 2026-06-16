@@ -527,6 +527,8 @@ sub store {
     elsif ($self->is_downgrade && $self->down) {
         QBitcoin::Downgrade::Commitment->create({
             tx_id        => $self->id,
+            freeze_txid  => $self->down->freeze_txid,
+            freeze_vout  => $self->down->freeze_vout,
             btc_txid     => $self->down->btc_txid,
             btc_vout     => $self->down->btc_vout,
             btc_value    => $self->down->btc_value,
@@ -662,6 +664,8 @@ sub as_hashref {
     $res->{time} = $self->received_time if defined $self->received_time;
     $res->{token_id} = unpack("H*", $self->token_hash // "") if $self->is_tokens;
     if ($self->is_downgrade && $self->down) {
+        $res->{freeze_txid}   = unpack("H*", $self->down->freeze_txid);
+        $res->{freeze_vout}   = $self->down->freeze_vout + 0;
         $res->{btc_txid}      = unpack("H*", scalar reverse $self->down->btc_txid);
         $res->{btc_vout}      = $self->down->btc_vout + 0;
         $res->{btc_value}     = $self->down->btc_value + 0;
@@ -1404,6 +1408,11 @@ sub validate_downgrade {
         Warningf("Downgrade transaction %s input is not a freeze output", $self->hash_str);
         return -1;
     }
+    if (($down->freeze_txid // "") ne $txo->tx_in || $down->freeze_vout != $txo->num) {
+        Warningf("Downgrade transaction %s source freeze commitment does not match the spent output",
+            $self->hash_str);
+        return -1;
+    }
     my $data = $txo->data // "";
     if (length($data) < $reclaim_len) {
         Warningf("Freeze input data too short in downgrade transaction %s", $self->hash_str);
@@ -1613,6 +1622,8 @@ sub pre_load {
                 die "No downgrade commitment for transaction " . unpack("H*", $attr->{hash}) . "\n";
             }
             $attr->{down} = QBitcoin::Downgrade->new({
+                freeze_txid  => $c->freeze_txid,
+                freeze_vout  => $c->freeze_vout,
                 btc_txid     => $c->btc_txid,
                 btc_vout     => $c->btc_vout,
                 btc_value    => $c->btc_value,

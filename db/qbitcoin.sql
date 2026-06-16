@@ -74,6 +74,8 @@ CREATE TABLE `slashing` (
 -- (see QBitcoin::Downgrade::Commitment).
 CREATE TABLE `downgrade` (
   tx_id        integer NOT NULL PRIMARY KEY,
+  freeze_txid  binary(32)      NOT NULL,  -- qbtc freeze transaction hash
+  freeze_vout  int unsigned    NOT NULL,
   btc_txid     binary(32)      NOT NULL,  -- committed BTC funding txid (internal byte order)
   btc_vout     int unsigned    NOT NULL,
   btc_value    bigint unsigned NOT NULL,

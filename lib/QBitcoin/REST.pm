@@ -679,8 +679,7 @@ sub tx_send {
     # Reject downgrade transactions when upgrade threshold reached
     if (my $best_block = QBitcoin::Block->best_block) {
         if (($best_block->upgraded // 0) >= UPGRADE_MAX_VALUE) {
-            my $freeze_scripthash = hash160(QBT_BURN_SCRIPT);
-            if (grep { $_->scripthash eq $freeze_scripthash && $_->data } @{$tx->out}) {
+            if (grep { ($_->scripthash // "") eq QBT_FREEZE_SCRIPTHASH } @{$tx->out}) {
                 return $self->http_response(400, "Conversion threshold reached, downgrade not accepted");
             }
         }
