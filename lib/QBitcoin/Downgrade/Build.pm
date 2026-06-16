@@ -8,9 +8,10 @@ use strict;
 #
 # The downgrade transaction:
 #   - spends the user's freeze output via the system (IF) branch;
-#   - commits (btc_txid, btc_vout, btc_value, scriptpubkey) so the burn can later be
-#     proved against the BTC payment (scriptpubkey is copied from the freeze data,
-#     so the service cannot redirect the payment);
+#   - commits the source freeze output plus (btc_txid, btc_vout, btc_value,
+#     scriptpubkey) so the burn can later be proved against the BTC payment
+#     (scriptpubkey is copied from the freeze data, so the service cannot redirect
+#     the payment);
 #   - produces one downgrade output carrying the same reclaim_id, from which the
 #     user can reclaim after the time-lock if the burn never appears.
 #
@@ -45,6 +46,8 @@ sub build_downgrade_tx {
     my $scriptpubkey = substr($data, $reclaim_len);
 
     my $commit = QBitcoin::Downgrade->new({
+        freeze_txid  => $freeze_txo->tx_in,
+        freeze_vout  => $freeze_txo->num,
         btc_txid     => $args{btc_txid},
         btc_vout     => $args{btc_vout},
         btc_value    => $args{btc_value},
