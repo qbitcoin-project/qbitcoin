@@ -3,9 +3,12 @@ use warnings;
 use strict;
 
 # Running total of the generated (emitted) coins for the best blockchain branch.
-# emission = GENESIS_REWARD + sum(coinbase up_value) + sum(static block reward)
+# emission = sum(coinbase up_value) + sum(static block reward)
 # Neither the dynamic block reward nor transaction fees are counted separately: they
 # recirculate already existing coins through the reward fund and do not create emission.
+# GENESIS_REWARD is not counted either: the genesis-reward coins are service coins for
+# the initial validation weight, their balance can never decrease (see
+# QBitcoin::Transaction::check_genesis_balance), so they never enter circulation.
 #
 # The total is computed once on the node startup (the only place where we scan the
 # coinbase table) and then maintained incrementally on confirm/unconfirm of coinbase
@@ -15,8 +18,11 @@ use strict;
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
 use QBitcoin::Log;
+use QBitcoin::Config;
 use QBitcoin::ORM qw(dbh);
 use QBitcoin::Coinbase;
+use QBitcoin::TXO;
+use QBitcoin::RedeemScript;
 use Bitcoin::Block;
 
 my $UPGRADE_TOTAL = 0; # sum of up_value of all coinbase transactions in the best branch
@@ -41,10 +47,49 @@ sub init {
 }
 
 # Total emitted coins in satoshi (raw value, callers divide by DENOMINATOR if needed).
+# The genesis reward is excluded: those coins can never be spent, only staked.
 sub total {
     my $class = shift;
     return 0 unless defined QBitcoin::Block->blockchain_height;
-    return GENESIS_REWARD + $UPGRADE_TOTAL + $STATIC_TOTAL;
+    return $UPGRADE_TOTAL + $STATIC_TOTAL;
+}
+
+# Scripthashes holding the genesis reward: the outputs of the genesis block's
+# inputless stake transaction. These are service coins - they provide a non-zero
+# validation weight at the chain start but are not backed by upgraded BTC, so
+# consensus forbids decreasing their balance (QBitcoin::Transaction::check_genesis_balance).
+# Returns a hashref { scripthash => 1 } (empty if no genesis reward is configured),
+# or undef if the genesis block is not known yet (the result is cached only once known).
+my $GENESIS_SCRIPTHASHES;
+sub genesis_scripthashes {
+    my $class = shift;
+    return $GENESIS_SCRIPTHASHES if defined $GENESIS_SCRIPTHASHES;
+    my $genesis_reward = $config->{regtest} ? $config->{genesis_reward} // 0 : GENESIS_REWARD;
+    return $GENESIS_SCRIPTHASHES = {} unless $genesis_reward;
+    my %scripthash;
+    if (my $block = QBitcoin::Block->best_block(0)) {
+        # Genesis block is still in-core (fresh chain, possibly not stored yet)
+        my $tx = $block->transactions->[0];
+        $tx && $tx->is_stake && !@{$tx->in}
+            or return undef;
+        $scripthash{$_->scripthash} = 1 foreach grep { $_->value > 0 } @{$tx->out};
+    }
+    else {
+        # QBitcoin::Transaction is always loaded by the time any transaction is
+        # validated; not use'd here to avoid a compile-time dependency loop.
+        my ($tx_row) = QBitcoin::Transaction->fetch(block_height => 0, block_pos => 0)
+            or return undef;
+        $tx_row->{tx_type} == TX_TYPE_STAKE
+            or return undef;
+        my $sql = "SELECT s.hash FROM `" . QBitcoin::TXO->TABLE . "` t" .
+            " JOIN `" . QBitcoin::RedeemScript->TABLE . "` s ON (t.scripthash = s.id)" .
+            " WHERE t.tx_in = ? AND t.value > 0";
+        my $hashes = dbh->selectcol_arrayref($sql, undef, $tx_row->{id});
+        $scripthash{$_} = 1 foreach @$hashes;
+    }
+    %scripthash
+        or return undef;
+    return $GENESIS_SCRIPTHASHES = \%scripthash;
 }
 
 sub add_coinbase { my (undef, $value) = @_; $UPGRADE_TOTAL += $value if $INITIALIZED }
