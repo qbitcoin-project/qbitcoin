@@ -79,10 +79,10 @@ sub coinbase_tx {
 QBitcoin::Coins->init();
 is(QBitcoin::Coins->total(), 0, "No coins before genesis");
 
-# Genesis block: emission is exactly the genesis reward
+# Genesis block: the genesis reward is service coins (unspendable), not emission
 my $block0 = QBitcoin::Generate->generate($time);
 ok($block0, "Generated genesis block");
-is(QBitcoin::Coins->total(), GENESIS_REWARD, "Genesis reward counted");
+is(QBitcoin::Coins->total(), 0, "Genesis reward not counted");
 
 # Block with a coinbase (upgrade): full upgraded value (pre-fee) is added
 my $tx = coinbase_tx();
@@ -93,13 +93,13 @@ $tx->add_to_cache();
 
 my $block1 = QBitcoin::Generate->generate($time + BLOCK_INTERVAL);
 ok($block1, "Generated block 1 with coinbase");
-is(QBitcoin::Coins->total(), GENESIS_REWARD + $value, "Upgrade emission counted (full value incl fee)");
+is(QBitcoin::Coins->total(), $value, "Upgrade emission counted (full value incl fee)");
 # static reward is zero during the upgrade phase in regtest
 is(QBitcoin::Block->static_reward($block0, $block1->time), 0, "No static reward during upgrade");
 
 # Unconfirm the best block: emission must roll back to the previous value
 $block1->unconfirm();
 is(QBitcoin::Block->blockchain_height, 0, "Back to genesis height");
-is(QBitcoin::Coins->total(), GENESIS_REWARD, "Coinbase emission removed on unconfirm");
+is(QBitcoin::Coins->total(), 0, "Coinbase emission removed on unconfirm");
 
 done_testing();
