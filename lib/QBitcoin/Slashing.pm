@@ -58,6 +58,7 @@ use QBitcoin::Log;
 use QBitcoin::Const;
 use QBitcoin::Crypto qw(hash160 hash256);
 use QBitcoin::TXO;
+use QBitcoin::Coins;
 use QBitcoin::Generate::Control;
 use Bitcoin::Serialized qw(varint varstr);
 
@@ -221,6 +222,12 @@ sub new_tx {
     my %in2 = map { $_->{txo}->key => 1 } @{$stake2->in};
     my @shared = grep { $in2{$_->{txo}->key} } @{$stake1->in}
         or return undef; # no common stake UTXO
+    # Genesis-reward UTXOs are exempt from slashing: their balance may never decrease
+    # (Transaction::check_genesis_balance), so the fine cannot be taken from them.
+    # validate_slashing allows exactly this omission and no other.
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
+    @shared = grep { !$genesis->{$_->{txo}->scripthash // ""} } @shared
+        or return undef; # only genesis-reward UTXOs equivocated - nothing slashable
     my @in = map { +{ txo => $_->{txo}, siglist => [] } } @shared;
     my @out = $class->canonical_outputs(\@in);
     my %shared = map { $_->{txo}->key => 1 } @shared;
@@ -265,11 +272,17 @@ sub _prevout {
     return QBitcoin::TXO->new_txo({ tx_in => $in->{tx_out}, num => $in->{num} });
 }
 
-# Keys of the outputs spent by both stakes
+# Keys of the outputs spent by both stakes, except the genesis-reward ones: these are exempt
+# from slashing (see new_tx), so they are not inputs of the slashing transaction, and the
+# prevouts state them like the outputs only one of the stakes spends. A genesis-reward
+# output is known by the redeem script the stake reveals for it.
 sub _shared {
     my ($stake1, $stake2) = @_;
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
     my %in1 = map { _prevout($_)->key => 1 } @{$stake1->in_raw};
-    return { map { $_ => 1 } grep { $in1{$_} } map { _prevout($_)->key } @{$stake2->in_raw} };
+    return { map { _prevout($_)->key => 1 }
+        grep { $in1{_prevout($_)->key} && !$genesis->{hash160($_->{redeem_script})} && !$genesis->{hash256($_->{redeem_script})} }
+        @{$stake2->in_raw} };
 }
 
 # Verify that the stake of a proof spends the shared outputs: run their input scripts
