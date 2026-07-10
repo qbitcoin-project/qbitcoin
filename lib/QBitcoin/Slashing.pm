@@ -42,6 +42,7 @@ use QBitcoin::Log;
 use QBitcoin::Const;
 use QBitcoin::Crypto qw(hash160 hash256);
 use QBitcoin::TXO;
+use QBitcoin::Coins;
 use QBitcoin::Generate::Control;
 use Bitcoin::Serialized qw(varint varstr);
 
@@ -201,6 +202,12 @@ sub new_tx {
     my %in2 = map { $_->{txo}->key => 1 } @{$stake2->in};
     my @shared = grep { $in2{$_->{txo}->key} } @{$stake1->in}
         or return undef; # no common stake UTXO
+    # Genesis-reward UTXOs are exempt from slashing: their balance may never decrease
+    # (Transaction::check_genesis_balance), so the fine cannot be taken from them.
+    # validate_slashing allows exactly this omission and no other.
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
+    @shared = grep { !$genesis->{$_->{txo}->scripthash // ""} } @shared
+        or return undef; # only genesis-reward UTXOs equivocated - nothing slashable
     my @in = map { +{ txo => $_->{txo}, siglist => [] } } @shared;
     my @out = $class->canonical_outputs(\@in);
     # Canonical order of the two proofs by block_sign_data (the signed message). Not by
