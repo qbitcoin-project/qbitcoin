@@ -1175,6 +1175,39 @@ sub validate_hash {
     return 0;
 }
 
+# GENESIS_REWARD coins are service coins: they give the chain a non-zero validation
+# weight from the very first block, but they are not backed by upgraded BTC, so they
+# must never enter circulation (otherwise the downgrade of all circulating coins back
+# to BTC could not be guaranteed). Consensus rule: no transaction may decrease the
+# balance of a genesis-reward scripthash - for each such scripthash the sum of the
+# transaction's inputs must not exceed the sum of its outputs back to the same
+# scripthash. Staking these coins is possible (the stake returns the full value),
+# spending, downgrading or slashing them is not.
+sub check_genesis_balance {
+    my $self = shift;
+    my $genesis = QBitcoin::Coins->genesis_scripthashes;
+    return 0 unless $genesis && %$genesis;
+    my %balance;
+    foreach my $in (@{$self->in}) {
+        my $txo = $in->{txo};
+        my $scripthash = $txo->scripthash // "";
+        $balance{$scripthash} += $txo->value if $genesis->{$scripthash};
+    }
+    %balance or return 0;
+    foreach my $out (@{$self->out}) {
+        my $scripthash = $out->scripthash // "";
+        $balance{$scripthash} -= $out->value if exists $balance{$scripthash};
+    }
+    foreach my $scripthash (sort keys %balance) {
+        if ($balance{$scripthash} > 0) {
+            Warningf("Transaction %s decreases genesis-reward balance of scripthash %s by %lu",
+                $self->hash_str, unpack("H*", $scripthash), $balance{$scripthash});
+            return -1;
+        }
+    }
+    return 0;
+}
+
 sub validate {
     my $self = shift;
 
@@ -1185,6 +1218,11 @@ sub validate {
             return -1;
         }
         return $self->validate_coinbase;
+    }
+    # The genesis-reward balance rule applies to every transaction type that spends inputs
+    if (!skip_scripts()) {
+        $self->check_genesis_balance == 0
+            or return -1;
     }
     if ($self->is_slashing) {
         return 0 if skip_scripts();
@@ -1320,13 +1358,14 @@ sub validate_slashing {
         return -1;
     }
     my $shared = $info->{shared};
-    if (@{$self->in} != keys %$shared) {
-        Warningf("Slashing transaction %s spends %u inputs but evidence has %u equivocated UTXOs",
-            $self->hash_str, scalar @{$self->in}, scalar keys %$shared);
-        return -1;
-    }
+    my %spent;
     foreach my $in (@{$self->in}) {
         my $txo = $in->{txo};
+        if ($spent{$txo->key}++) {
+            Warningf("Slashing transaction %s spends input %s:%u twice",
+                $self->hash_str, $txo->tx_in_str, $txo->num);
+            return -1;
+        }
         my $s = $shared->{$txo->key};
         if (!$s) {
             Warningf("Slashing transaction %s spends non-equivocated input %s:%u",
@@ -1355,6 +1394,20 @@ sub validate_slashing {
         if (@{$in->{siglist} // []}) {
             Warningf("Slashing transaction %s input %s:%u must carry no signature",
                 $self->hash_str, $txo->tx_in_str, $txo->num);
+            return -1;
+        }
+    }
+    # Every equivocated UTXO must be spent, except genesis-reward ones: their balance
+    # may never decrease (check_genesis_balance), so the fine cannot be taken from them
+    # and new_tx leaves them out. Any other omission would let an equivocator escape
+    # part of the fine.
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
+    foreach my $key (sort keys %$shared) {
+        next if $spent{$key};
+        my $s = $shared->{$key};
+        unless (grep { QBitcoin::Slashing->redeem_matches_scripthash($s->{redeem_script}, $_) } keys %$genesis) {
+            Warningf("Slashing transaction %s does not spend non-genesis equivocated UTXO %s:%u",
+                $self->hash_str, unpack("H*", substr($key, 0, 32)), unpack("v", substr($key, 32)));
             return -1;
         }
     }

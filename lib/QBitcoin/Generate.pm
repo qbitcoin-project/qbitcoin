@@ -25,6 +25,7 @@ use QBitcoin::Crypto qw(hash256);
 use QBitcoin::Slashing;
 use QBitcoin::ValueUpgraded qw(level_by_total);
 use QBitcoin::Utils qw(get_address_utxo);
+use QBitcoin::Coins;
 use QBitcoin::Crypto qw(hash256);
 use QBitcoin::Address qw(address_by_hash);
 use QBitcoin::Generate::Control;
@@ -190,13 +191,31 @@ sub reward_addr {
     return $conf->[0];
 }
 
+# Staked wallet addresses usable as a reward destination. Genesis-reward addresses are
+# excluded: consensus forbids decreasing their balance (Transaction::check_genesis_balance),
+# so a reward (and, in join mode, any joined coins) sent there would be locked forever.
+# If the wallet has no other staked address, fall back to the full list with a warning -
+# locking the reward is still better than not staking at all.
+sub reward_address_candidates {
+    my @address = stake_address();
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
+    return @address unless %$genesis && @address;
+    my @non_genesis = grep { my $addr = $_; !grep { $genesis->{$_} } $addr->scripthash } @address;
+    return @non_genesis if @non_genesis;
+    state $warned;
+    Warningf("All staked addresses hold the genesis reward, the block reward will be locked; set reward_addr or add another address")
+        unless $warned++;
+    return @address;
+}
+
 sub make_out_join {
     my ($reward, $my_txo) = @_;
 
+    my @address = reward_address_candidates();
     my $my_address;
     if ($config->{sign_alg}) {
         foreach my $sign_alg (split(/\s+/, $config->{sign_alg})) {
-            foreach my $addr (stake_address()) {
+            foreach my $addr (@address) {
                 if (grep { $_ eq $sign_alg } $addr->algo) {
                     $my_address = $addr;
                     last;
@@ -205,7 +224,7 @@ sub make_out_join {
             last if $my_address;
         }
     }
-    $my_address //= (stake_address())[0]
+    $my_address //= $address[0]
         or return ();
     my $my_amount = sum0 map { $_->value } @$my_txo;
     return QBitcoin::TXO->new_txo(
@@ -251,8 +270,9 @@ sub make_out_union {
     my ($reward, $my_txo, $timeslot) = @_;
     my @my;
     if (!@$my_txo) {
-        # Reward to all stake addresses in equal parts
-        @my = map { [ scalar($_->scripthash), 0, 1 ] } stake_address();
+        # Reward to all stake addresses in equal parts (genesis-reward addresses
+        # excluded unless the wallet has no other, see reward_address_candidates)
+        @my = map { [ scalar($_->scripthash), 0, 1 ] } reward_address_candidates();
     }
     else {
         @my = my_txo_by_address($my_txo, $timeslot);
@@ -304,6 +324,15 @@ sub make_stake_tx {
             && !$_->is_immature_reclaim($timeslot)
             && !QBitcoin::Generate::Control->is_utxo_published($timeslot, $_->key)
     } QBitcoin::TXO->staked_utxo();
+    # Genesis-reward UTXOs provide validation weight but their value must return to
+    # the same scripthash (Transaction::check_genesis_balance), so keep them out of
+    # the configured reward scheme and give them dedicated unchanged-value outputs.
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
+    my @genesis_txo;
+    if (%$genesis && grep { $genesis->{$_->scripthash} } @my_txo) {
+        @genesis_txo = grep {  $genesis->{$_->scripthash} } @my_txo;
+        @my_txo      = grep { !$genesis->{$_->scripthash} } @my_txo;
+    }
     my $reward_to = $config->{reward_to} // "union";
     if ($reward_to eq "none") {
         return undef;
@@ -313,7 +342,6 @@ sub make_stake_tx {
         $config->{reward_to} = "none";
         return undef;
     }
-
     # The reward-address cut goes first; the remainder is distributed to the
     # staking addresses. Union and separate need no delegation special-casing:
     # each address gets a single output of its full input value plus its part
@@ -357,6 +385,17 @@ sub make_stake_tx {
     }
     else { # union
         push @out, make_out_union($reward_rest, \@my_txo, $timeslot);
+    }
+    if (@genesis_txo) {
+        my %genesis_sum;
+        $genesis_sum{$_->scripthash} += $_->value foreach @genesis_txo;
+        push @out, map {
+            QBitcoin::TXO->new_txo(
+                value      => $genesis_sum{$_},
+                scripthash => $_,
+            )
+        } sort keys %genesis_sum;
+        push @my_txo, @genesis_txo;
     }
 
     my $tx = QBitcoin::Transaction->new(
