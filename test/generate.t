@@ -57,7 +57,7 @@ my $tx2 = send_tx(0, $tx, $myaddr->redeem_script);
 send_block(1, "a1", "a0", 5, $stake_tx, $tx, $tx2);
 is(QBitcoin::Block->blockchain_height, 1, "Block a1 received");
 
-is(QBitcoin::Coins->total(), GENESIS_REWARD + 2*$static_reward, "Total coins is " . (GENESIS_REWARD + 2*$static_reward));
+is(QBitcoin::Coins->total(), 2*$static_reward, "Total coins is " . (2*$static_reward));
 
 block_hash("b1");
 my $block1 = eval { QBitcoin::Generate->generate($time + BLOCK_INTERVAL) };
@@ -74,6 +74,6 @@ ok($block2, "Alternative block c1 generated");
 is(scalar(@{$block2->transactions}), 4, "Generated block contains 4 transactions");
 is(QBitcoin::Block->best_block->hash, "c1", "Block 1 altered");
 
-is(QBitcoin::Coins->total(), GENESIS_REWARD + 2*$static_reward, "Total coins is " . (GENESIS_REWARD + 2*$static_reward));
+is(QBitcoin::Coins->total(), 2*$static_reward, "Total coins is " . (2*$static_reward));
 
 done_testing();
