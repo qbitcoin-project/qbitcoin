@@ -491,6 +491,8 @@ Arguments:
          "token_decimals": n,    (numeric, optional) Token decimals, valid only for token creation, 0 to 18
          "token_name": "str",    (string, optional) Token name, valid only for token creation
          "token_symbol": "str",  (string, optional) Token symbol, valid only for token creation
+         "data": "hex",          (string, optional) Raw data payload for the output; not allowed for token or Bitcoin-address outputs
+         "tag": "str",           (string, optional) Tag label for the output (stored as "T"+tag in the output data)
        },
        ...
      ]
@@ -535,6 +537,57 @@ sub cmd_createrawtransaction {
         return $self->response_error("Transaction size too large: " . length($tx_data) . " > " . MAX_TX_SIZE, ERR_INVALID_REQUEST);
     }
     return $self->response_ok(unpack("H*", $tx_data));
+}
+
+$PARAMS{splitstake} = "split_spec?";
+$HELP{splitstake} = qq(
+splitstake {"tag":amount,...}
+
+Split the genesis-reward coins staked by this node into tagged parts inside the
+next generated stake transaction. Each spec entry creates an output of the given
+amount on the genesis address labelled with the tag (the empty tag "" keeps a part
+untagged); the amounts must sum to exactly the genesis amount this node stakes.
+Each validator node stakes only the part matching its stake_tag config option
+(the untagged part when stake_tag is not set), so after the split the other parts
+can be staked by other nodes holding the same key.
+
+The pending split is persisted and applied in the next generated block; it is
+cleared automatically once the split is confirmed (after a deep reorg unwinding
+the split block, re-issue the command). Called without arguments, shows the
+pending split. Called with an empty object {}, cancels the pending split.
+
+Arguments:
+1. spec    (json object, optional) {"tag": amount, ...}, amounts in QBTC
+
+Result:
+The pending split spec (amounts in QBTC), or null if none.
+
+Examples:
+> qbitcoin-cli splitstake '{"":10,"node2":40}'
+> qbitcoin-cli splitstake '{}'
+> qbitcoin-cli splitstake
+);
+delete $HELP{splitstake}; # leave this command undocumented for now
+sub cmd_splitstake {
+    my $self = shift;
+    my $spec = $self->args->[0];
+    if (defined($spec)) {
+        if (%$spec) {
+            my %split;
+            foreach my $tag (keys %$spec) {
+                my $amount = int($spec->{$tag} * DENOMINATOR + 0.5);
+                $amount > 0
+                    or return $self->response_error("Amount for tag '$tag' must be positive", ERR_INVALID_REQUEST);
+                $split{$tag} = $amount;
+            }
+            QBitcoin::Generate->stake_split(\%split);
+        }
+        else {
+            QBitcoin::Generate->stake_split(undef);
+        }
+    }
+    my $split = QBitcoin::Generate->stake_split;
+    return $self->response_ok($split ? { map { $_ => $split->{$_} / DENOMINATOR } keys %$split } : undef);
 }
 
 $PARAMS{sendrawtransaction} = "hexstring";
