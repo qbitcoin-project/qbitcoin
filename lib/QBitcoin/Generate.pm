@@ -4,6 +4,7 @@ use strict;
 use feature 'state';
 
 use List::Util qw(sum0);
+use Cpanel::JSON::XS;
 use QBitcoin::Const;
 use QBitcoin::Log;
 use QBitcoin::Config;
@@ -26,6 +27,7 @@ use QBitcoin::Slashing;
 use QBitcoin::ValueUpgraded qw(level_by_total);
 use QBitcoin::Utils qw(get_address_utxo);
 use QBitcoin::Coins;
+use QBitcoin::Setting;
 use QBitcoin::Crypto qw(hash256);
 use QBitcoin::Address qw(address_by_hash);
 use QBitcoin::Generate::Control;
@@ -191,6 +193,101 @@ sub reward_addr {
     return $conf->[0];
 }
 
+# The node's genesis part label as it appears in the TXO data field: the genesis
+# reward may be split into tagged parts (see splitstake), and each validator node
+# stakes only the part matching its stake_tag config ("" - untagged - by default).
+sub stake_tag {
+    return defined($config->{stake_tag}) && $config->{stake_tag} ne ""
+        ? TXO_DATA_TAG . $config->{stake_tag}
+        : "";
+}
+
+# Pending stake-split spec { tag => amount-in-satoshi }: the next stake transaction
+# spending this node's genesis part re-creates it as several tagged outputs. Set by
+# the splitstake RPC command; persisted in the settings table to survive a restart;
+# cleared automatically once the split is observed confirmed (stake_split_done).
+use constant STAKE_SPLIT_SETTING => "stake_split";
+my $STAKE_SPLIT;
+my $STAKE_SPLIT_LOADED;
+sub stake_split {
+    my $class = shift;
+    if (@_) {
+        my ($split) = @_;
+        if ($split && %$split) {
+            QBitcoin::Setting->set(STAKE_SPLIT_SETTING, Cpanel::JSON::XS->new->canonical->encode($split));
+        }
+        else {
+            QBitcoin::Setting->unset(STAKE_SPLIT_SETTING);
+            $split = undef;
+        }
+        $STAKE_SPLIT = $split;
+        $STAKE_SPLIT_LOADED = 1;
+    }
+    elsif (!$STAKE_SPLIT_LOADED) {
+        my $stored = QBitcoin::Setting->get(STAKE_SPLIT_SETTING);
+        $STAKE_SPLIT = $stored ? eval { Cpanel::JSON::XS->new->decode($stored) } : undef;
+        $STAKE_SPLIT_LOADED = 1;
+    }
+    return $STAKE_SPLIT;
+}
+
+# Has the pending split been reached? For every tag in the spec the confirmed genesis
+# UTXOs carrying that tag must sum to exactly the requested amount. The spec is
+# cleared as soon as this holds; in the unlikely case a deep reorg unwinds the split
+# block after that, re-issue the splitstake command.
+sub stake_split_done {
+    my ($split, $genesis) = @_;
+    my %sum;
+    foreach my $txo (grep { $genesis->{$_->scripthash} && txo_confirmed($_) } QBitcoin::TXO->staked_utxo()) {
+        $sum{$txo->data // ""} += $txo->value;
+    }
+    foreach my $tag (keys %$split) {
+        my $data = $tag eq "" ? "" : TXO_DATA_TAG . $tag;
+        ($sum{$data} // 0) == $split->{$tag}
+            or return 0;
+    }
+    return 1;
+}
+
+# Outputs returning the staked genesis value: normally one output per scripthash
+# carrying the node's own tag, so the part perpetuates itself. While a stake split is
+# pending and its total matches the staked genesis amount exactly - one output per
+# spec entry with the new tags instead.
+sub make_genesis_out {
+    my ($genesis_txo) = @_;
+    my %genesis_sum;
+    $genesis_sum{$_->scripthash} += $_->value foreach @$genesis_txo;
+    if (my $split = QBitcoin::Generate->stake_split) {
+        if (keys %genesis_sum == 1) {
+            my ($scripthash) = keys %genesis_sum;
+            my $split_total = sum0 values %$split;
+            if ($split_total == $genesis_sum{$scripthash}) {
+                return map {
+                    QBitcoin::TXO->new_txo(
+                        value      => $split->{$_},
+                        scripthash => $scripthash,
+                        data       => $_ eq "" ? "" : TXO_DATA_TAG . $_,
+                    )
+                } sort keys %$split;
+            }
+            state $warned_amount = -1;
+            if ($warned_amount != $genesis_sum{$scripthash}) {
+                Warningf("Pending stake split total %lu does not match the staked genesis amount %lu, split postponed",
+                    $split_total, $genesis_sum{$scripthash});
+                $warned_amount = $genesis_sum{$scripthash};
+            }
+        }
+    }
+    my $data = stake_tag();
+    return map {
+        QBitcoin::TXO->new_txo(
+            value      => $genesis_sum{$_},
+            scripthash => $_,
+            data       => $data,
+        )
+    } sort keys %genesis_sum;
+}
+
 # Staked wallet addresses usable as a reward destination. Genesis-reward addresses are
 # excluded: consensus forbids decreasing their balance (Transaction::check_genesis_balance),
 # so a reward (and, in join mode, any joined coins) sent there would be locked forever.
@@ -327,11 +424,21 @@ sub make_stake_tx {
     # Genesis-reward UTXOs provide validation weight but their value must return to
     # the same scripthash (Transaction::check_genesis_balance), so keep them out of
     # the configured reward scheme and give them dedicated unchanged-value outputs.
+    # Only the part carrying this node's own tag is staked: the genesis reward may be
+    # split into tagged parts between validator nodes (splitstake), and a foreign
+    # part must stay untouched even though the wallet holds its key.
     my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
     my @genesis_txo;
-    if (%$genesis && grep { $genesis->{$_->scripthash} } @my_txo) {
-        @genesis_txo = grep {  $genesis->{$_->scripthash} } @my_txo;
-        @my_txo      = grep { !$genesis->{$_->scripthash} } @my_txo;
+    if (%$genesis) {
+        my $my_tag = stake_tag();
+        @genesis_txo = grep { $genesis->{$_->scripthash} && ($_->data // "") eq $my_tag } @my_txo;
+        @my_txo     = grep { !$genesis->{$_->scripthash} } @my_txo;
+        if (my $split = QBitcoin::Generate->stake_split) {
+            if (stake_split_done($split, $genesis)) {
+                Infof("Stake split completed, clear the pending spec");
+                QBitcoin::Generate->stake_split(undef);
+            }
+        }
     }
     my $reward_to = $config->{reward_to} // "union";
     if ($reward_to eq "none") {
@@ -387,14 +494,7 @@ sub make_stake_tx {
         push @out, make_out_union($reward_rest, \@my_txo, $timeslot);
     }
     if (@genesis_txo) {
-        my %genesis_sum;
-        $genesis_sum{$_->scripthash} += $_->value foreach @genesis_txo;
-        push @out, map {
-            QBitcoin::TXO->new_txo(
-                value      => $genesis_sum{$_},
-                scripthash => $_,
-            )
-        } sort keys %genesis_sum;
+        push @out, make_genesis_out(\@genesis_txo);
         push @my_txo, @genesis_txo;
     }
 
