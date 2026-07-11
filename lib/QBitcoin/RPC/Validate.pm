@@ -41,6 +41,7 @@ my %SPEC = (
     address_type   => \&validate_address_type,
     pubkeyhash     => \&validate_pubkeyhash,
     tag            => qr/^(?:[a-zA-Z][a-zA-Z0-9_.-]{0,63})?\z/,
+    split_spec     => \&validate_split_spec,
     password       => \&validate_password,
     node           => qr/^[0-9A-Za-z\[\]:.\-]{1,255}\z/,
     include_watchonly => \&validate_boolean,
@@ -142,6 +143,24 @@ sub validate_vout {
         or return 0;
     $value <= 65535
         or return 0;
+    return 1;
+}
+
+# splitstake spec: { tag => amount }, the empty tag stands for the untagged part;
+# an empty object cancels the pending split
+sub validate_split_spec {
+    my $value = $_[0];
+    my $spec = ref($value) ? $value : eval { $JSON->decode($value) };
+    if (!$spec || ref($spec) ne "HASH") {
+        return 0;
+    }
+    foreach my $tag (keys %$spec) {
+        $tag =~ /^(?:[a-zA-Z][a-zA-Z0-9_.-]{0,63})?\z/
+            or return 0;
+        (!ref($spec->{$tag}) && is_amount($spec->{$tag}))
+            or return 0;
+    }
+    $_[0] = $spec;
     return 1;
 }
 
