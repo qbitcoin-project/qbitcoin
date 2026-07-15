@@ -5,7 +5,7 @@ use feature 'state';
 
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
-use QBitcoin::ORM qw(:types);
+use QBitcoin::ORM qw(dbh :types);
 use QBitcoin::Accessors qw(mk_accessors new);
 use QBitcoin::Config;
 use QBitcoin::ProtocolState qw(skip_scripts);
@@ -54,6 +54,45 @@ sub branch_height {
         $self = $self->next_block;
     }
     return $self->height;
+}
+
+# Feerate (satoshi per kb) of the cheapest fee-paying standard or tokens transaction
+# in the block, undef if there are no such transactions.
+# It is the market anchor for the next block min_fee (see QBitcoin::MinFee).
+# Derived attribute, not stored in the database: computed from the in-memory
+# transactions (block validation caches it), or fetched by a single query
+# for blocks loaded from the database (deep reorg beyond incore levels).
+sub min_tx_fee {
+    my $self = shift;
+    unless (exists $self->{min_tx_fee}) {
+        my $min_tx_fee;
+        if ($self->{transactions}) {
+            foreach my $transaction (@{$self->{transactions}}) {
+                next unless ($transaction->is_standard || $transaction->is_tokens) && $transaction->fee > 0;
+                my $fee_per_kb = int($transaction->fee * 1024 / $transaction->size);
+                $min_tx_fee = $fee_per_kb if !defined($min_tx_fee) || $fee_per_kb < $min_tx_fee;
+            }
+        }
+        elsif ($self->{tx_by_hash}) {
+            die "Get min_tx_fee from not-loaded block\n";
+        }
+        else {
+            # MIN() and FLOOR() commute (floor is monotone), so the aggregate can floor
+            # on the sql side. (fee*1024 - fee*1024 % size) is divisible by size, which
+            # makes the division exact in both mysql and sqlite: plain fee*1024/size
+            # would be ROUNDED decimal division in mysql (may cross an integer boundary
+            # upwards) but truncated integer division in sqlite, and FLOOR() may be
+            # missing in sqlite builds
+            ($min_tx_fee) = dbh->selectrow_array(
+                "SELECT MIN((fee*1024 - fee*1024 % size) / size) FROM `" . QBitcoin::Transaction->TABLE . "`" .
+                " WHERE block_height = ? AND fee > 0 AND tx_type IN (?,?)",
+                undef, $self->height, TX_TYPE_STANDARD, TX_TYPE_TOKENS);
+            # mysql returns the decimal division result as a string like "11.0000"
+            $min_tx_fee = int($min_tx_fee) if defined $min_tx_fee;
+        }
+        $self->{min_tx_fee} = $min_tx_fee;
+    }
+    return $self->{min_tx_fee};
 }
 
 sub self_weight {
