@@ -85,4 +85,19 @@ send_block(4, "a4", "a3", 58, $stake, @tx);
 $block = QBitcoin::Block->best_block(4);
 is($block->min_fee, 13, "Block 4 min fee is 13");
 
+# min_tx_fee is a derived attribute: check that the value computed from the
+# in-memory transactions matches the one computed by the database query.
+# Insert bare transaction rows (block store side effects are not needed here)
+# and query via a fresh block object without loaded transactions.
+$block = QBitcoin::Block->best_block(2);
+is($block->min_tx_fee, 2, "Block 2 min_tx_fee from in-memory transactions");
+$block->replace(); # bare block row to satisfy the foreign key
+my $pos = 0;
+foreach my $transaction (@{$block->transactions}) {
+    $transaction->block_pos = $pos++;
+    QBitcoin::ORM::replace($transaction);
+}
+my $db_block = QBitcoin::Block->new(height => $block->height);
+is($db_block->min_tx_fee, 2, "Block 2 min_tx_fee computed by the database query");
+
 done_testing();
