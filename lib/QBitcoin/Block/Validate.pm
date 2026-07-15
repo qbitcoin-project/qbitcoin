@@ -82,7 +82,7 @@ sub validate {
     my $upgraded   = $block->prev_block ? $block->prev_block->upgraded   // 0 : 0;
     my $downgraded = $block->prev_block ? $block->prev_block->downgraded // 0 : 0;
     my $downgrade_pinned = $block->prev_block ? $block->prev_block->downgrade_pinned // 0 : 0;
-    my $min_block_fee;
+    my $min_tx_fee;
     my $was_standard;
     my $was_slashing;
     my $can_consume = 1; # Can validator consume transaction fee? No if stake transaction has no inputs
@@ -166,8 +166,8 @@ sub validate {
                 }
                 ++$empty_tx if $transaction->fee == 0;
             }
-            else {
-                $min_block_fee = $tx_fee_per_kb if !defined($min_block_fee) || $tx_fee_per_kb < $min_block_fee;
+            if ($transaction->fee > 0 && (!defined($min_tx_fee) || $tx_fee_per_kb < $min_tx_fee)) {
+                $min_tx_fee = $tx_fee_per_kb;
             }
             $was_standard = $transaction->hash_str;
         }
@@ -212,7 +212,9 @@ sub validate {
     my $static_reward = $block_reward ? (ref $block)->static_reward($block->prev_block, $block->time) : 0;
     $block->reward_fund = $block->prev_block ? $block->prev_block->reward_fund + $fee + $static_reward - $block_reward : 0;
     $block->size = $block_size;
-    $block->min_fee = $block_size > MAX_BLOCK_SIZE / 2 ? $min_block_fee : $min_fee;
+    $block->min_fee = $min_fee;
+    # Cache the derived market anchor for the next block min_fee (see Block::min_tx_fee)
+    $block->{min_tx_fee} = $min_tx_fee;
     return "";
 }
 

@@ -13,6 +13,13 @@ use constant {
     SIZE_FRACTION   => 64,      # Size fraction for @POWER2 array (bytes)
     MIN_FEE         => 10,      # 10 satoshi/kb -- less fee allowed, but only MAX_EMPTY_TX_IN_BLOCK per block
     MAX_MIN_FEE     => 1000000, # 0.01 qbtc/kb  -- it's not maximum allowed fee, it's only maximum for min_fee
+    # Tolerance band around the previous block size:
+    # [prev_size * BAND_LOW_NUM / BAND_DENOM .. prev_size * BAND_HIGH_NUM / BAND_DENOM].
+    # Within the band min_fee is anchored to the market (cheapest paid feerate of the
+    # previous block); outside it the size-based formula (base_min_fee) applies.
+    BAND_DENOM      => 10,
+    BAND_LOW_NUM    => 9,
+    BAND_HIGH_NUM   => 11,
 };
 
 # 2 ** (i/256)
@@ -57,7 +64,60 @@ my @POWER2 = (
 @POWER2 == int(FEE_LINEAR_SIZE / SIZE_FRACTION) + 1
     or die "POWER2 array size is not correct: " . scalar(@POWER2) . " != " . (int(FEE_LINEAR_SIZE / SIZE_FRACTION) + 1);
 
+# Required min feerate (satoshi per kb) for a block of $size built on $prev_block.
+#
+# The bar re-anchors to the market each block: within the tolerance band around the
+# previous block size it is set to (cheapest paid feerate of the previous block + 1),
+# in both directions. A mempool flood at some uniform feerate thus pushes the bar just
+# above that feerate and gets locked out of the blockchain (draining one low-fee
+# transaction per block), while new transactions keep confirming at barely higher fees.
+# Outside the band the size-based formula applies: sharp growth is priced by
+# base_min_fee, sharp shrink lets it decay the bar (which also flushes stale sub-bar
+# transactions left behind after a fee spike, so the bar cannot get stuck high).
+#
+# Two clamps on top:
+# - monotonicity: min(pin, formula) below prev_size and max(pin, formula) above it,
+#   so the required fee never decreases when the block grows; this also guarantees
+#   that transactions below the final block min_fee always form a suffix of the
+#   feerate-sorted block, keeping the builder and the validator low-fee counting
+#   consistent;
+# - the pin may not drop the bar faster than the regular decay (not below
+#   prev min_fee * MIN_FEE_REDUCE), so a single block containing one very cheap
+#   transaction cannot crater the bar in one step.
 sub min_fee {
+    my ($prev_block, $size) = @_;
+    # Allow any fee for tiny blocks, and tiny block resets min_fee
+    return 0 if $size < TINY_BLOCK_SIZE;
+    return MIN_FEE if !$prev_block;
+    my $min_tx_fee = $prev_block->min_tx_fee;
+    # No fee-paying transactions in the previous block (empty, coinbase-only or
+    # zero-fee only) - no market anchor, use the size-based formula
+    return base_min_fee($prev_block, $size) if !defined($min_tx_fee);
+    my $pin = $min_tx_fee + 1;
+    my $reduced = int($prev_block->min_fee * MIN_FEE_REDUCE);
+    $pin = $reduced    if $pin < $reduced;
+    $pin = MIN_FEE     if $pin < MIN_FEE;
+    $pin = MAX_MIN_FEE if $pin > MAX_MIN_FEE;
+    my $prev_size = $prev_block->size;
+    my $bar;
+    if ($size * BAND_DENOM < $prev_size * BAND_LOW_NUM || $size * BAND_DENOM > $prev_size * BAND_HIGH_NUM) {
+        $bar = base_min_fee($prev_block, $size);
+    }
+    else {
+        $bar = $pin;
+    }
+    if ($size < $prev_size) {
+        $bar = $pin if $bar > $pin;
+    }
+    elsif ($size > $prev_size) {
+        $bar = $pin if $bar < $pin;
+    }
+    return $bar;
+}
+
+# The size-based component: prices block growth (relative to the previous block)
+# and decays the bar when the block shrinks
+sub base_min_fee {
     my ($prev_block, $size) = @_;
     # Allow any fee for tiny blocks, and tiny block resets min_fee
     # This is to avoid the situation where big coinbase transaction(s) increase block size and set min_fee too high
