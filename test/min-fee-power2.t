@@ -16,6 +16,7 @@ package MockBlock;
 sub new     { my ($class, $min_fee, $size) = @_; return bless { min_fee => $min_fee, size => $size }, $class }
 sub min_fee { $_[0]->{min_fee} }
 sub size    { $_[0]->{size} }
+sub min_tx_fee { undef } # no market anchor: min_fee() falls back to the size-based formula tested here
 
 package main;
 
