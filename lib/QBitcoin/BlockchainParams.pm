@@ -31,7 +31,7 @@ use constant MAINNET => {
     },
 };
 use constant TESTNET => {
-    GENESIS_HASH       => pack("H*", ""),
+    GENESIS_HASH       => pack("H*", "9a23986048cffb3b5115365cd94fe58441703653e561e0ff89f00c68a424b342"),
     QBT_LOCK_PUBKEY    => pack("H*", "02943a59688f1eceb1d068f6ac0ff84c8f17b2c3714269aec2185422cd61b748b6"),
     QBT_LOCK_ADDR      => "mqbtcT4awjiAjrxMyGNnbdusCdCpMkryxv",
     ADDRESS_VER        => "\xef",
@@ -41,7 +41,7 @@ use constant TESTNET => {
     PKH_MAGIC          => "\x3f\x00", # base58 pubkeyhash strings start with "AKX" (hash256) or "2vt" (hash160)
     PRIVATE_KEY_RE     => qr/^(?:[9c][1-9A-HJ-NP-Za-km-z]{50,51}|3[ST][1-9A-HJ-NP-Za-km-z]{1755})$/,
     ADDRESS_RE         => qr/^(?:btq[1-9A-HJ-NP-Za-km-z]{33}|3ua[234][1-9A-HJ-NP-Za-km-z]{49})$/,
-    GENESIS_TIME       => 1635933000,
+    GENESIS_TIME       => 1784460000, # 2026-07-19 11:20:00
     PORT               => 19555,
     RPC_PORT           => 19556,
     REST_PORT          => 19557,
