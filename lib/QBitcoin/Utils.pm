@@ -9,6 +9,7 @@ use Exporter qw(import);
 our @EXPORT_OK = qw(
     get_address_txs
     get_address_utxo
+    utxo_tag
     address_received
     address_balance
     address_stats
@@ -352,6 +353,19 @@ sub _add_token_data {
     }
 }
 
+# Display tag of a get_address_utxo entry, as a (tag => ...) pair or empty list.
+# The tag convention (data = TXO_DATA_TAG . tag) applies to ordinary outputs only:
+# token payloads and downgrade reclaim outputs ([reclaim_id][payload]) use the data
+# field for other purposes and must not be shown as tags even if the first byte
+# happens to match.
+sub utxo_tag {
+    my ($utxo) = @_;
+    return () if $utxo->{reclaim} || defined $utxo->{token_id};
+    my $data = $utxo->{data} // "";
+    return () unless length($data) && ord($data) == ord(TXO_DATA_TAG);
+    return (tag => substr($data, 1));
+}
+
 sub get_address_utxo {
     # $data_prefix (optional): keep only outputs whose data begins with these bytes.
     # Used to pick out our own trustless-downgrade reclaim outputs (reclaim_id =
@@ -488,6 +502,9 @@ sub get_address_reclaim_utxo {
                 my $block = QBitcoin::Block->best_block($bh) // QBitcoin::Block->find(height => $bh)
                     // next;
                 next unless $block->time + $csv_sec <= $now;   # mature (reclaimable) only
+                # data here is [reclaim_id][payload], not a tag even if it happens to
+                # start with the TXO_DATA_TAG byte; let consumers tell these apart
+                $u->{reclaim} = 1;
                 $result{$txid}->[$vout] = $u;
             }
         }
