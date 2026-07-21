@@ -32,8 +32,8 @@ use QBitcoin::Wallet;
 use QBitcoin::Transaction;
 use QBitcoin::Block;
 use QBitcoin::TXO;
-use QBitcoin::Utils qw(get_address_txs get_address_utxo address_stats all_tokens_balance get_tokens_txs get_tokens_info create_txo estimate_fees check_tx_tokens_balance);
-use QBitcoin::Crypto qw(pk_import pk_alg generate_keypair hash160);
+use QBitcoin::Utils qw(get_address_txs get_address_utxo utxo_tag get_address_reclaim_utxo address_stats all_tokens_balance get_tokens_txs get_tokens_info create_txo estimate_fees check_tx_tokens_balance);
+use QBitcoin::Crypto qw(pk_import pk_alg generate_keypair hash256);
 use QBitcoin::Generate;
 use QBitcoin::Generate::Control;
 use QBitcoin::ProtocolState qw(blockchain_synced btc_synced);
@@ -945,6 +945,14 @@ sub get_address_unspent {
     my ($txo_chain, $txo_mempool) = get_address_utxo($address);
     $txo_chain
         or return $self->http_response(404, "Incorrect address");
+    # Surface our matured trustless-downgrade reclaim outputs under this address too.
+    my $reclaim_utxo = get_address_reclaim_utxo($address);
+    foreach my $txid (keys %$reclaim_utxo) {
+        for my $vout (0 .. $#{$reclaim_utxo->{$txid}}) {
+            my $u = $reclaim_utxo->{$txid}->[$vout] // next;
+            $txo_chain->{$txid}->[$vout] = $u;
+        }
+    }
     my @utxo;
     foreach my $txid (keys %$txo_chain) {
         for (my $vout = 0; $vout < @{$txo_chain->{$txid}}; $vout++) {
@@ -960,7 +968,8 @@ sub get_address_unspent {
                 defined($utxo->{token_id})     ? ( token_id          => unpack("H*", $utxo->{token_id}) ) : (),
                 defined($utxo->{token_amount}) ? ( token_amount      => $utxo->{token_amount}      ) : (),
                 $utxo->{token_permissions}     ? ( token_permissions => $utxo->{token_permissions} ) : (),
-                !defined($utxo->{token_id}) && ord($utxo->{data} // "") == ord(TXO_DATA_TAG) ? ( tag => substr($utxo->{data}, 1) ) : (),
+                utxo_tag($utxo),
+                $utxo->{reclaim} ? ( reclaim => TRUE ) : (),
             }
         }
     }
@@ -977,7 +986,7 @@ sub get_address_unspent {
                 defined($utxo->{token_id})     ? ( token_id          => unpack("H*", $utxo->{token_id}) ) : (),
                 defined($utxo->{token_amount}) ? ( token_amount      => $utxo->{token_amount} ) : (),
                 $utxo->{token_permissions}     ? ( token_permissions => $utxo->{token_permissions} ) : (),
-                !defined($utxo->{token_id}) && ord($utxo->{data} // "") == ord(TXO_DATA_TAG) ? ( tag => substr($utxo->{data}, 1) ) : (),
+                utxo_tag($utxo),
             };
         }
     }

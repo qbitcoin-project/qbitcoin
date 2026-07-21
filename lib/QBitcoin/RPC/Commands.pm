@@ -32,7 +32,7 @@ use QBitcoin::Generate::Control;
 use QBitcoin::Protocol;
 use QBitcoin::Peer;
 use QBitcoin::ConnectionList;
-use QBitcoin::Utils qw(get_address_txs get_address_utxo get_address_reclaim_utxo address_received address_balance tokens_balance tokens_received get_tokens_info create_txo estimate_fees check_tx_tokens_balance);
+use QBitcoin::Utils qw(get_address_txs get_address_utxo utxo_tag get_address_reclaim_utxo address_received address_balance tokens_balance tokens_received get_tokens_info create_txo estimate_fees check_tx_tokens_balance);
 use Bitcoin::Serialized;
 use Bitcoin::Block;
 
@@ -2047,7 +2047,8 @@ sub cmd_listunspent {
                     defined($utxo->{token_id})     ? ( token_id          => unpack("H*", $utxo->{token_id}) ) : (),
                     defined($utxo->{token_amount}) ? ( token_amount      => $utxo->{token_amount}      ) : (),
                     $utxo->{token_permissions}     ? ( token_permissions => $utxo->{token_permissions} ) : (),
-                    !defined($utxo->{token_id}) && ord($utxo->{data} // "") == ord(TXO_DATA_TAG) ? ( tag => substr($utxo->{data}, 1) ) : (),
+                    utxo_tag($utxo),
+                    $utxo->{reclaim} ? ( reclaim => TRUE ) : (),
                     defined($utxo->{block_height}) ? (
                         confirmations => $best_height - $utxo->{block_height} + 1,
                         block_height  => $utxo->{block_height},
