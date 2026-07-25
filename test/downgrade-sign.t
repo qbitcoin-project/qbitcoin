@@ -63,4 +63,54 @@ for my $case ([ "freeze", QBT_FREEZE_SCRIPT ], [ "downgrade output", QBT_DOWNGRA
         "sign_transaction: freeze reclaim input signed via reclaim_id lookup");
 }
 
+# --- output_as_hashref shows the reclaim status, our reclaim address and the
+# --- network-encoded Bitcoin destination address ---
+{
+    use Bitcoin::Address qw(encode_btc_address);
+    my $mod = Test::MockModule->new('QBitcoin::MyAddress');
+    $mod->mock('get_by_pubkeyhash', sub { my ($c, $h) = @_; return $h eq $reclaim_id ? $addr : undef });
+
+    my $freeze_out = QBitcoin::TXO->new_txo(value => $V, num => 0,
+        scripthash => QBT_FREEZE_SCRIPTHASH, data => $reclaim_id . $spk);
+    my $tx = QBitcoin::Transaction->new(in => [], out => [$freeze_out], tx_type => TX_TYPE_STANDARD, fee => 0);
+    my $res = $tx->output_as_hashref($freeze_out);
+    is($res->{downgrade}{reclaim}, unpack("H*", $reclaim_id),
+        "freeze output: reclaim_id is shown");
+    is($res->{downgrade}{reclaim_address}, $addr->address,
+        "freeze output: our reclaim address is shown");
+    is($res->{address}, encode_btc_address(pack("C", BTC_P2PKH_VER), "\xab" x 20),
+        "freeze output: BTC destination encoded for the current network");
+
+    my $down_out = QBitcoin::TXO->new_txo(value => $V, num => 0,
+        scripthash => QBT_DOWNGRADE_SCRIPTHASH, data => $reclaim_id);
+    $res = $tx->output_as_hashref($down_out);
+    is($res->{downgrade}{reclaim}, unpack("H*", $reclaim_id),
+        "downgrade output: reclaim_id is shown");
+    is($res->{downgrade}{reclaim_address}, $addr->address,
+        "downgrade output: our reclaim address is shown");
+    ok(!exists $res->{data},
+        "downgrade output: reclaim_id is not duplicated as raw data");
+
+    my $foreign_out = QBitcoin::TXO->new_txo(value => $V, num => 0,
+        scripthash => QBT_FREEZE_SCRIPTHASH, data => ("\x99" x 32) . $spk);
+    $res = $tx->output_as_hashref($foreign_out);
+    ok(!exists $res->{downgrade}{reclaim_address},
+        "foreign reclaim_id: no reclaim_address");
+
+    # REST vout_obj shows the same downgrade info
+    require QBitcoin::REST;
+    my $vout = QBitcoin::REST::vout_obj($tx, $freeze_out);
+    is($vout->{downgrade}{reclaim}, unpack("H*", $reclaim_id),
+        "REST freeze vout: reclaim_id is shown");
+    is($vout->{downgrade}{reclaim_address}, $addr->address,
+        "REST freeze vout: our reclaim address is shown");
+    is($vout->{downgrade}{btc_address}, encode_btc_address(pack("C", BTC_P2PKH_VER), "\xab" x 20),
+        "REST freeze vout: BTC destination encoded for the current network");
+    $vout = QBitcoin::REST::vout_obj($tx, $down_out);
+    is($vout->{downgrade}{reclaim}, unpack("H*", $reclaim_id),
+        "REST downgrade vout: reclaim_id is shown");
+    ok(!exists $vout->{downgrade}{btc_address},
+        "REST downgrade vout: no btc_address (reclaim_id only)");
+}
+
 done_testing();
