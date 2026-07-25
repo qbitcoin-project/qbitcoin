@@ -805,6 +805,12 @@ sub vout_obj {
         scripthash         => unpack("H*", $out->scripthash),
         scripthash_address => address_by_hash($out->scripthash),
     };
+    # Trustless-downgrade outputs (freeze / downgrade-tx): show the Bitcoin
+    # destination address and the reclaim status, matching the RPC display.
+    if (my ($btc_addr, $downgrade) = QBitcoin::Transaction::output_downgrade_info($out)) {
+        $downgrade->{btc_address} = $btc_addr if defined $btc_addr;
+        $res->{downgrade} = $downgrade;
+    }
     if ($tx->is_tokens) {
         $res->{token_id} = unpack("H*", $tx->token_hash || $tx->hash);
         if (length($out->data // "")) {

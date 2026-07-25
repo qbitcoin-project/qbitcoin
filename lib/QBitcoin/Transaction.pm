@@ -29,6 +29,7 @@ use QBitcoin::Generate::Control;
 use QBitcoin::Coins;
 use Bitcoin::Serialized;
 use Bitcoin::Address qw(is_btc_address scriptpubkey_to_btc_address);
+use QBitcoin::MyAddress;
 
 use Role::Tiny::With;
 with 'QBitcoin::Transaction::Tokens';
@@ -785,6 +786,35 @@ sub deserialize_output {
     };
 }
 
+# Display info for a trustless-downgrade output, used by RPC (output_as_hashref)
+# and REST (vout_obj). Freeze output: data = [reclaim_id][btc scriptPubKey];
+# downgrade-tx output: data = [reclaim_id]. Returns ($btc_address, $downgrade)
+# where $downgrade = { reclaim => "pending" | hex reclaim_id, reclaim_address =>
+# our QBTC address when the reclaim_id matches a wallet key }, or an empty list
+# for other outputs. reclaim_id = hash256(pubkey) is a one-way hash, so the
+# reclaim address is resolvable only via the wallet key store.
+sub output_downgrade_info {
+    my ($out) = @_;
+    my $sh = $out->scripthash // "";
+    return () unless $sh eq QBT_FREEZE_SCRIPTHASH || $sh eq QBT_DOWNGRADE_SCRIPTHASH;
+    my $rlen = QBT_RECLAIM_ID_LEN;
+    my $data = $out->data // "";
+    return () unless length($data) >= $rlen;
+    my $reclaim_id = substr($data, 0, $rlen);
+    my $btc_addr = length($data) > $rlen ? scriptpubkey_to_btc_address(substr($data, $rlen)) : undef;
+    my $downgrade;
+    if ($reclaim_id eq ("\x00" x $rlen)) {
+        $downgrade = { reclaim => "pending" };
+    }
+    else {
+        $downgrade = { reclaim => unpack("H*", $reclaim_id) };
+        if (my $my_address = QBitcoin::MyAddress->get_by_pubkeyhash($reclaim_id)) {
+            $downgrade->{reclaim_address} = $my_address->address;
+        }
+    }
+    return ($btc_addr, $downgrade);
+}
+
 sub output_as_hashref {
     my $self = shift;
     my $out = shift;
@@ -793,21 +823,12 @@ sub output_as_hashref {
         value   => $value / DENOMINATOR,
         address => $out->address,
     };
-    # Trustless-downgrade freeze output: data = [reclaim_id][btc scriptPubKey].
-    # Show the Bitcoin destination address (so decoderawtransaction mirrors what
-    # createrawtransaction accepted) and the reclaim status.
-    my $sh = $out->scripthash // "";
-    if ($sh eq QBT_FREEZE_SCRIPTHASH) {
-        my $rlen = QBT_RECLAIM_ID_LEN;
-        my $data = $out->data // "";
-        if (length($data) > $rlen) {
-            my $reclaim_id = substr($data, 0, $rlen);
-            my $btc_addr   = scriptpubkey_to_btc_address(substr($data, $rlen));
-            $res->{address}  = $btc_addr if defined $btc_addr;
-            $res->{downgrade} = {
-                reclaim => $reclaim_id eq ("\x00" x $rlen) ? "pending" : unpack("H*", $reclaim_id),
-            };
-        }
+    # Trustless-downgrade outputs: show the Bitcoin destination address (so
+    # decoderawtransaction mirrors what createrawtransaction accepted) and the
+    # reclaim status.
+    if (my ($btc_addr, $downgrade) = output_downgrade_info($out)) {
+        $res->{address}   = $btc_addr if defined $btc_addr;
+        $res->{downgrade} = $downgrade;
     }
     if ($self->is_tokens) {
         $res = { %$res, %{$self->token_output_as_hashref($out)} };
