@@ -83,10 +83,11 @@ sub decode_raw_tx {
 my $test_scripthash = hash160("test-redeem-script");
 my $test_qbtc_addr  = address_by_hash($test_scripthash);
 
-# Generate valid Bitcoin addresses of each standard type.
+# Generate valid Bitcoin addresses of each standard type, encoded for the
+# current network (regtest here — Base58 versions as testnet, HRP "bcrt").
 my $btc_hash160 = "a" x 20;   # 20 arbitrary bytes (0xaa each)
-my $btc_p2pkh_addr  = encode_btc_address("\x00", $btc_hash160);   # P2PKH mainnet
-my $btc_p2sh_addr   = encode_btc_address("\x05", "b" x 20);       # P2SH  mainnet
+my $btc_p2pkh_addr  = encode_btc_address(pack("C", BTC_P2PKH_VER), $btc_hash160); # P2PKH
+my $btc_p2sh_addr   = encode_btc_address(pack("C", BTC_P2SH_VER), "b" x 20);      # P2SH
 my $btc_p2wpkh_addr = encode_p2wpkh("c" x 20);                    # P2WPKH Bech32
 my $btc_p2tr_addr   = encode_p2tr("d" x 32);                      # P2TR   Bech32m
 
@@ -292,6 +293,28 @@ my $fake_txid = "00" x 32;
         "P2TR downgrade output: no 'data' field");
     cmp_ok($decoded->{out}[0]{value}, '==', 2.0,
         "P2TR downgrade output: value is 2.0 QBTC");
+}
+
+# -----------------------------------------------------------------------
+# 8. Wrong-network Bitcoin address
+#    A mainnet address must be rejected on testnet/regtest (and vice versa):
+#    the committed BTC payment is checked on the network's own BTC chain.
+# -----------------------------------------------------------------------
+{
+    my $btc_mainnet_p2pkh = encode_btc_address("\x00", $btc_hash160);
+    my $btc_mainnet_bech32 = encode_p2wpkh("c" x 20, "bc");
+
+    my $hex = create_raw_tx(
+        [ { txid => $fake_txid, vout => 0 } ],
+        [ { $btc_mainnet_p2pkh => 1.0 } ],
+    );
+    ok(!defined $hex, "mainnet P2PKH address is rejected on regtest");
+
+    $hex = create_raw_tx(
+        [ { txid => $fake_txid, vout => 0 } ],
+        [ { $btc_mainnet_bech32 => 1.0 } ],
+    );
+    ok(!defined $hex, "mainnet Bech32 address is rejected on regtest");
 }
 
 done_testing();
