@@ -14,10 +14,17 @@ use strict;
 # Address strings are the canonical representation used throughout:
 # createrawtransaction stores the address string (ASCII) directly in the
 # TXO data field; decoderawtransaction reads it back as-is.
+#
+# All encoding and validation follows the Bitcoin network matching the node's
+# own network (BTC_P2PKH_VER / BTC_P2SH_VER / BTC_BECH32_HRP from
+# QBitcoin::BlockchainParams): mainnet by default, Bitcoin testnet for
+# -testnet, Bitcoin regtest for -regtest. Addresses of another Bitcoin
+# network are rejected by decode_btc_address/is_btc_address.
 
 use Math::GMPz;
 use Encode::Base58::GMP qw(encode_base58 decode_base58);
 use QBitcoin::Crypto qw(checksum32);
+use QBitcoin::BlockchainParams;
 
 use Exporter qw(import);
 our @EXPORT_OK = qw(
@@ -173,42 +180,43 @@ sub _encode_bech32 {
 
 # ---- Public API ----------------------------------------------------------
 
-# is_btc_address($str) → 1 if $str is any valid Bitcoin address, 0 otherwise.
+# is_btc_address($str) → 1 if $str is a valid Bitcoin address for the current
+# network, 0 otherwise.
 sub is_btc_address {
     my ($addr) = @_;
     return 0 unless defined $addr && length($addr) >= 14;
-    return 1 if _base58check_decode($addr);
-    return 1 if _decode_bech32($addr);
-    return 0;
+    return decode_btc_address($addr) ? 1 : 0;
 }
 
 # decode_btc_address($addr) → hashref with type/version/hash info, or undef.
+# Addresses of another Bitcoin network (wrong version byte or HRP) → undef.
 #
 # Returned hashref always has:
 #   type    => 'p2pkh' | 'p2sh' | 'p2wpkh' | 'p2wsh' | 'p2tr' | 'segwit'
 #   hash    => raw binary hash (hash160 for P2PKH/P2SH/P2WPKH; sha256 for P2WSH/P2TR)
 #
 # Additionally for Base58Check types:
-#   version => version byte as integer (0x00 for P2PKH, 0x05 for P2SH, etc.)
+#   version => version byte as integer (0x00 for P2PKH, 0x05 for P2SH mainnet)
 #
 # Additionally for Bech32/Bech32m types:
 #   witness_version => integer (0 for SegWit, 1 for Taproot)
-#   hrp             => human-readable part ("bc", "tb", etc.)
+#   hrp             => human-readable part ("bc", "tb", "bcrt")
 sub decode_btc_address {
     my ($addr) = @_;
     return undef unless defined $addr;
 
-    # Try Base58Check (P2PKH, P2SH, and exotic mainnet/testnet versions).
+    # Try Base58Check (P2PKH, P2SH).
     if (my ($ver_bin, $hash) = _base58check_decode($addr)) {
         my $ver  = unpack("C", $ver_bin);
-        my $type = $ver == 0x00 || $ver == 0x6F ? 'p2pkh'
-                 : $ver == 0x05 || $ver == 0xC4 ? 'p2sh'
-                 :                                 'base58check';
+        my $type = $ver == BTC_P2PKH_VER ? 'p2pkh'
+                 : $ver == BTC_P2SH_VER  ? 'p2sh'
+                 :                          return undef;
         return { type => $type, version => $ver, hash => $hash };
     }
 
     # Try Bech32 / Bech32m (SegWit, Taproot).
     if (my ($hrp, $wit_ver, $prog) = _decode_bech32($addr)) {
+        return undef unless $hrp eq BTC_BECH32_HRP;
         my $plen = length($prog);
         my $type = $wit_ver == 0 && $plen == 20 ? 'p2wpkh'
                  : $wit_ver == 0 && $plen == 32 ? 'p2wsh'
@@ -229,24 +237,24 @@ sub encode_btc_address {
 }
 
 # encode_p2wpkh($hash160, $hrp) → Bech32 P2WPKH address.
-# $hrp defaults to "bc" (mainnet).
+# $hrp defaults to the current network ("bc" mainnet, "tb" testnet, "bcrt" regtest).
 sub encode_p2wpkh {
     my ($hash160, $hrp) = @_;
-    $hrp //= "bc";
+    $hrp //= BTC_BECH32_HRP;
     return _encode_bech32($hrp, 0, $hash160);
 }
 
 # encode_p2wsh($sha256, $hrp) → Bech32 P2WSH address.
 sub encode_p2wsh {
     my ($sha256, $hrp) = @_;
-    $hrp //= "bc";
+    $hrp //= BTC_BECH32_HRP;
     return _encode_bech32($hrp, 0, $sha256);
 }
 
 # encode_p2tr($xonly_pubkey, $hrp) → Bech32m P2TR address.
 sub encode_p2tr {
     my ($xonly, $hrp) = @_;
-    $hrp //= "bc";
+    $hrp //= BTC_BECH32_HRP;
     return _encode_bech32($hrp, 1, $xonly);
 }
 
@@ -287,16 +295,17 @@ sub btc_address_to_scriptpubkey {
 
 # scriptpubkey_to_btc_address($spk) → Bitcoin address string, or undef if the
 # scriptPubKey is not a recognized standard form. Reverse of
-# btc_address_to_scriptpubkey; used for display (RPC/REST). Mainnet encodings.
+# btc_address_to_scriptpubkey; used for display (RPC/REST). Encodes for the
+# current network.
 sub scriptpubkey_to_btc_address {
     my ($spk) = @_;
     return undef unless defined $spk;
     my $len = length($spk);
     if ($len == 25 && substr($spk, 0, 3) eq "\x76\xa9\x14" && substr($spk, 23, 2) eq "\x88\xac") {
-        return encode_btc_address("\x00", substr($spk, 3, 20));   # P2PKH
+        return encode_btc_address(pack("C", BTC_P2PKH_VER), substr($spk, 3, 20));   # P2PKH
     }
     if ($len == 23 && substr($spk, 0, 2) eq "\xa9\x14" && substr($spk, 22, 1) eq "\x87") {
-        return encode_btc_address("\x05", substr($spk, 2, 20));   # P2SH
+        return encode_btc_address(pack("C", BTC_P2SH_VER), substr($spk, 2, 20));    # P2SH
     }
     if ($len == 22 && substr($spk, 0, 2) eq "\x00\x14") {
         return encode_p2wpkh(substr($spk, 2, 20));                # P2WPKH
