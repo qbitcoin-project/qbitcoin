@@ -88,8 +88,8 @@ for my $case ([ "freeze", QBT_FREEZE_SCRIPT ], [ "downgrade output", QBT_DOWNGRA
         "downgrade output: reclaim_id is shown");
     is($res->{downgrade}{reclaim_address}, $addr->address,
         "downgrade output: our reclaim address is shown");
-    ok(!exists $res->{data},
-        "downgrade output: reclaim_id is not duplicated as raw data");
+    ok($res->{data},
+        "downgrade output: output contains raw data");
 
     my $foreign_out = QBitcoin::TXO->new_txo(value => $V, num => 0,
         scripthash => QBT_FREEZE_SCRIPTHASH, data => ("\x99" x 32) . $spk);
