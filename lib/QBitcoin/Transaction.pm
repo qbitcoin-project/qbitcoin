@@ -833,8 +833,8 @@ sub output_as_hashref {
     if ($self->is_tokens) {
         $res = { %$res, %{$self->token_output_as_hashref($out)} };
     }
-    elsif (length($out->data) && !$res->{downgrade}) {
-        if (ord($out->data) eq ord(TXO_DATA_TAG)) {
+    elsif (length($out->data)) {
+        if (ord($out->data) eq ord(TXO_DATA_TAG) && !$res->{downgrade}) {
             $res->{tag} = substr($out->data, 1);
         }
         else {
