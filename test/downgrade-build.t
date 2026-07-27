@@ -21,7 +21,8 @@ use QBitcoin::Downgrade::Build;
 
 $config->{regtest} = 1;
 
-my $sys = QBitcoin::MyAddress->new(private_key => wallet_import_format(generate_keypair(CRYPT_ALGO_ECDSA)->pk_serialize));
+my $sys_wif = wallet_import_format(generate_keypair(CRYPT_ALGO_ECDSA)->pk_serialize);
+my $sys = QBitcoin::MyAddress->new(private_key => $sys_wif);
 my $sys_pk = $sys->pubkey;
 my $reclaim_id = "\x11" x 32;
 my $spk = "\x76\xa9\x14" . ("\xcc" x 20) . "\x88\xac";
@@ -51,8 +52,12 @@ my $test_freeze =
     my $tx = QBitcoin::Transaction->new(in => [{ txo => $freeze_txo }], out => [$out],
         tx_type => TX_TYPE_DOWNGRADE, fee => 0, down => $commit, hash => "\x01" x 32);
 
-    $tx->make_sign_freeze_if($tx->in->[0], $sys, 0, $test_freeze);
+    # Sign with a fresh address object (nothing derived on it yet), the way the
+    # conversion service creates the system address from the bare private key.
+    my $sys_fresh = QBitcoin::MyAddress->new(private_key => $sys_wif);
+    $tx->make_sign_freeze_if($tx->in->[0], $sys_fresh, 0, $test_freeze);
     is(scalar @{$tx->in->[0]{siglist}}, 2, "freeze-IF siglist [sig, '\\x01']");
+    ok(defined $tx->in->[0]{siglist}[0], "signature defined for an ad-hoc address object");
     is($tx->in->[0]{siglist}[1], "\x01", "IF selector is true");
     ok(script_eval($tx->in->[0]{siglist}, $test_freeze, $tx, 0),
         "freeze-IF: system sig + TX_TYPE_DOWNGRADE passes the IF branch");
