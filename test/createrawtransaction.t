@@ -13,7 +13,7 @@ use QBitcoin::Config;
 use QBitcoin::BlockchainParams;
 use QBitcoin::Crypto qw(hash160);
 use QBitcoin::Address qw(address_by_hash);
-use Bitcoin::Address qw(encode_btc_address encode_p2wpkh encode_p2tr);
+use Bitcoin::Address qw(encode_btc_address encode_p2wpkh encode_p2tr btc_address_to_scriptpubkey);
 use QBitcoin::TXO;
 use QBitcoin::Transaction;
 use Bitcoin::Serialized;
@@ -87,7 +87,8 @@ my $test_qbtc_addr  = address_by_hash($test_scripthash);
 # current network (regtest here — Base58 versions as testnet, HRP "bcrt").
 my $btc_hash160 = "a" x 20;   # 20 arbitrary bytes (0xaa each)
 my $btc_p2pkh_addr  = encode_btc_address(pack("C", BTC_P2PKH_VER), $btc_hash160); # P2PKH
-my $btc_p2sh_addr   = encode_btc_address(pack("C", BTC_P2SH_VER), "b" x 20);      # P2SH
+my $btc_scripthash = "b" x 20; # 20 arbitrary bytes (0xbb each)
+my $btc_p2sh_addr   = encode_btc_address(pack("C", BTC_P2SH_VER), $btc_scripthash); # P2SH
 my $btc_p2wpkh_addr = encode_p2wpkh("c" x 20);                    # P2WPKH Bech32
 my $btc_p2tr_addr   = encode_p2tr("d" x 32);                      # P2TR   Bech32m
 
@@ -239,8 +240,8 @@ my $fake_txid = "00" x 32;
         "P2SH downgrade tx: one output");
     is($decoded->{out}[0]{address}, $btc_p2sh_addr,
         "P2SH downgrade output: P2SH address is shown");
-    ok(!exists $decoded->{out}[0]{data},
-        "P2SH downgrade output: no 'data' field");
+    is($decoded->{out}[0]{data}, unpack("H*", "\x00"x32 . btc_address_to_scriptpubkey($btc_p2sh_addr)),
+        "P2SH downgrade output: 'data' field");
     cmp_ok($decoded->{out}[0]{value}, '==', 1.5,
         "P2SH downgrade output: value is 1.5 QBTC");
 }
@@ -264,8 +265,8 @@ my $fake_txid = "00" x 32;
         "P2WPKH downgrade tx: one output");
     is($decoded->{out}[0]{address}, $btc_p2wpkh_addr,
         "P2WPKH downgrade output: Bech32 address is shown");
-    ok(!exists $decoded->{out}[0]{data},
-        "P2WPKH downgrade output: no 'data' field");
+    is($decoded->{out}[0]{data}, unpack("H*", "\x00"x32 . btc_address_to_scriptpubkey($btc_p2wpkh_addr)),
+        "P2WPKH downgrade output: 'data' field");
     cmp_ok($decoded->{out}[0]{value}, '==', 0.5,
         "P2WPKH downgrade output: value is 0.5 QBTC");
 }
@@ -289,8 +290,8 @@ my $fake_txid = "00" x 32;
         "P2TR downgrade tx: one output");
     is($decoded->{out}[0]{address}, $btc_p2tr_addr,
         "P2TR downgrade output: Bech32m address is shown");
-    ok(!exists $decoded->{out}[0]{data},
-        "P2TR downgrade output: no 'data' field");
+    is($decoded->{out}[0]{data}, unpack("H*", "\x00"x32 . btc_address_to_scriptpubkey($btc_p2tr_addr)),
+        "P2TR downgrade output: 'data' field");
     cmp_ok($decoded->{out}[0]{value}, '==', 2.0,
         "P2TR downgrade output: value is 2.0 QBTC");
 }
