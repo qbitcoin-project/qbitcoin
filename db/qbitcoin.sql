@@ -153,6 +153,11 @@ CREATE UNIQUE INDEX `btc_height` ON `btc_block` (height);
 CREATE UNIQUE INDEX `btc_hash`   ON `btc_block` (hash);
 CREATE        INDEX `scanned`    ON `btc_block` (scanned, height);
 
+-- Regular coinbase upgrades (upgrade_stop = 0, an output to the burn address) and
+-- stop-utxo spend records (upgrade_stop = 1, btc_out_num is an input index, no
+-- scripthash; a spend of an UPGRADE_STOP_UTXO output which stops the conversion).
+-- Both kinds share the strict btc ordering (btc_block_height, btc_tx_num, btc_out_num);
+-- a stop record is ordered before every coinbase of its own btc transaction.
 CREATE TABLE `coinbase` (
   btc_block_height int unsigned DEFAULT NULL,
   btc_tx_num smallint unsigned DEFAULT NULL,
@@ -161,10 +166,11 @@ CREATE TABLE `coinbase` (
   merkle_path blob(512) NOT NULL, -- 16-level btree with 32-byte (256-bit) hashes
   btc_tx_data longblob NOT NULL, -- or 'blob' for sqlite
   value bigint unsigned NOT NULL,
-  scripthash integer NOT NULL,
+  scripthash integer DEFAULT NULL,
   tx_out integer DEFAULT NULL,
   upgrade_level integer DEFAULT NULL,
-  PRIMARY KEY (btc_tx_hash, btc_out_num),
+  upgrade_stop smallint unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (btc_tx_hash, btc_out_num, upgrade_stop),
   FOREIGN KEY (btc_block_height) REFERENCES `btc_block`     (height) ON DELETE CASCADE,
   FOREIGN KEY (tx_out)           REFERENCES `transaction`   (id)     ON DELETE SET NULL,
   FOREIGN KEY (scripthash)       REFERENCES `redeem_script` (id)     ON DELETE RESTRICT

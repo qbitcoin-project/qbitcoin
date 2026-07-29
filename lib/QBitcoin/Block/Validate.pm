@@ -45,6 +45,7 @@ sub validate {
             $block->upgraded    = 0; # Genesis block has no upgrades
             $block->downgraded  = 0; # Genesis block has no downgrades
             $block->downgrade_pinned = 0;
+            $block->upgrade_stopped  = 0;
             $block->reward_fund = 0;
             $block->size = sum0(map { $_->size } @{$block->transactions});
             $block->min_fee = 0;
@@ -82,12 +83,14 @@ sub validate {
     my $upgraded   = $block->prev_block ? $block->prev_block->upgraded   // 0 : 0;
     my $downgraded = $block->prev_block ? $block->prev_block->downgraded // 0 : 0;
     my $downgrade_pinned = $block->prev_block ? $block->prev_block->downgrade_pinned // 0 : 0;
+    my $upgrade_stopped  = $block->prev_block ? $block->prev_block->upgrade_stopped  // 0 : 0;
     my $min_tx_fee;
     my $was_standard;
     my $was_slashing;
     my $can_consume = 1; # Can validator consume transaction fee? No if stake transaction has no inputs
     my $was_burn;
     my $was_downgrade;
+    my $was_upgrade_stopped;
     for (my $num = 0; $num < @{$block->transactions}; $num++) {
         my $transaction = $block->transactions->[$num];
         if ($tx_in_block{$transaction->hash}++) {
@@ -99,6 +102,9 @@ sub validate {
         if (UPGRADE_POW && $transaction->coins_created) {
             if ($upgraded >= UPGRADE_MAX_VALUE) {
                 return "Coinbase transaction " . $transaction->hash_str . " rejected: upgrade threshold reached";
+            }
+            if ($upgrade_stopped) {
+                return "Coinbase transaction " . $transaction->hash_str . " rejected: upgrade stopped";
             }
             if ($transaction->upgrade_level != level_by_total($upgraded += $transaction->up->value_btc)) {
                 return "Incorrect upgrade level for transaction " . $transaction->hash_str;
@@ -120,6 +126,28 @@ sub validate {
             if ($was_slashing && !$config->{regtest}) {
                 return "Coinbase transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
             }
+        }
+        elsif ($transaction->is_upgrade_stop) {
+            if (!UPGRADE_POW) {
+                return "Upgrade stop transaction " . $transaction->hash_str . " rejected: no upgrade";
+            }
+            if ($upgrade_stopped) {
+                return "Duplicate upgrade stop transaction " . $transaction->hash_str;
+            }
+            if ($was_burn && !$config->{regtest}) {
+                return "Upgrade stop transaction " . $transaction->hash_str . " must not be after burn transaction $was_burn";
+            }
+            if ($was_downgrade && !$config->{regtest}) {
+                return "Upgrade stop transaction " . $transaction->hash_str . " must not be after downgrade transaction $was_downgrade";
+            }
+            if ($was_slashing && !$config->{regtest}) {
+                return "Upgrade stop transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
+            }
+            if ($was_standard && !$config->{regtest}) {
+                return "Upgrade stop transaction " . $transaction->hash_str . " must not be after standard transaction $was_standard";
+            }
+            $upgrade_stopped = 1;
+            $was_upgrade_stopped = $transaction->hash_str;
         }
         elsif ($transaction->is_burn) {
             if ($was_standard && !$config->{regtest}) {
@@ -146,6 +174,11 @@ sub validate {
             }
             if ($was_slashing && !$config->{regtest}) {
                 return "Downgrade transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
+            }
+            # New downgrades stop together with upgrades; burns for downgrades committed
+            # before the stop remain valid (the BTC side is already paid)
+            if ($upgrade_stopped) {
+                return "Downgrade transaction " . $transaction->hash_str . " rejected: upgrade stopped";
             }
             $downgrade_pinned += sum0(map { $_->value } @{$transaction->out});
             $was_downgrade = $transaction->hash_str;
@@ -186,7 +219,7 @@ sub validate {
         else {
             return "Transaction " . $transaction->hash_str . " is not a coinbase, downgrade, burn, stake or standard transaction";
         }
-        if (!@{$transaction->in} && !$transaction->coins_created) {
+        if (!@{$transaction->in} && !$transaction->coins_created && !$transaction->is_upgrade_stop) {
             if ($num > 0) {
                 return "Transaction " . $transaction->hash_str . " has no inputs";
             }
@@ -209,6 +242,7 @@ sub validate {
     $block->upgraded   = $upgraded;
     $block->downgraded = $downgraded;
     $block->downgrade_pinned = $downgrade_pinned;
+    $block->upgrade_stopped  = $upgrade_stopped;
     my $static_reward = $block_reward ? (ref $block)->static_reward($block->prev_block, $block->time) : 0;
     $block->reward_fund = $block->prev_block ? $block->prev_block->reward_fund + $fee + $static_reward - $block_reward : 0;
     $block->size = $block_size;
@@ -235,8 +269,19 @@ sub validate_chain {
                 $fail_tx = $tx->hash;
                 last;
             }
-            # Strict coinbase ordering: previous coinbase in BTC order must be already included in this branch
+            # Strict coinbase ordering: previous coinbase in BTC order must be already included
+            # in this branch. The upgrade stop record shares the table and is ordered before
+            # every coinbase of its (and any later) btc transaction, so the stop requires all
+            # earlier coinbases confirmed, and anything (a coinbase or a second stop) whose
+            # predecessor is the stop is simply invalid: nothing follows the stop.
             if (!skip_scripts() && (my $prev = $coinbase->prev())) {
+                if ($prev->{upgrade_stop}) {
+                    Warningf("Coinbase %u:%u:%u follows the upgrade stop %u:%u; no upgrades after the stop",
+                        $coinbase->btc_block_height, $coinbase->btc_tx_num, $coinbase->btc_out_num,
+                        $prev->{btc_block_height}, $prev->{btc_tx_num});
+                    $fail_tx = $tx->hash;
+                    last;
+                }
                 if (!$prev->{confirmed}) {
                     Warningf("Coinbase %u:%u:%u has predecessor %u:%u:%u but it's not included in this branch",
                         $coinbase->btc_block_height, $coinbase->btc_tx_num, $coinbase->btc_out_num,

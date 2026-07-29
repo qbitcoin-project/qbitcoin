@@ -292,7 +292,6 @@ Result (for verbosity = 1):
   "size" : n,                     (numeric) The block size
   "weight" : n,                   (numeric) The block weight
   "height" : n,                   (numeric) The block height or index
-  "upgraded" : n,                 (numeric) Cumulative BTC satoshis converted to QBTC (net)
   "merkleroot" : "hex",           (string) The merkle root
   "tx" : [                        (json array) The transaction ids
     "hex",                        (string) The transaction id
@@ -340,7 +339,6 @@ sub cmd_getblock {
         merkleroot        => unpack("H*", $block->merkle_root),
         weight            => $block->weight,
         confirm_weight    => $best_block->weight - $block->weight,
-        upgraded          => $block->upgraded,
     };
     $res->{upgraded} = ($block->upgraded // 0) / DENOMINATOR if UPGRADE_POW;
     if ($verbosity == 1) {
@@ -634,9 +632,9 @@ sub cmd_sendrawtransaction {
     if (!$tx->load_txo()) {
         return $self->response_error("Incorrect transaction data.", ERR_DESERIALIZATION_ERROR);
     }
-    # Reject downgrade transactions (outputs to freeze address) when upgrade threshold reached
+    # Reject downgrade transactions (outputs to freeze address) when upgrade threshold reached or upgrade stopped
     if (my $best_block = QBitcoin::Block->best_block) {
-        if (($best_block->upgraded // 0) >= UPGRADE_MAX_VALUE) {
+        if (($best_block->upgraded // 0) >= UPGRADE_MAX_VALUE || $best_block->upgrade_stopped) {
             if (grep { ($_->scripthash // "") eq QBT_FREEZE_SCRIPTHASH } @{$tx->out}) {
                 return $self->response_error("Conversion threshold reached, downgrade not accepted.", ERR_INVALID_REQUEST);
             }
