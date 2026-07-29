@@ -683,6 +683,10 @@ sub _generate {
         # Create new coinbase transaction and add it to mempool (if it's not there)
         QBitcoin::Transaction->new_coinbase($coinbase, $upgrade_level);
     }
+    if (my $stop = QBitcoin::Coinbase->get_new_stop($timeslot)) {
+        # A stop-utxo spend is confirmed in the btc blockchain: publish the upgrade stop
+        QBitcoin::Transaction->new_upgrade_stop($stop);
+    }
     # Generate burn transactions for downgrade payments confirmed on the BTC chain.
     QBitcoin::Downgrade::Burn->generate_burns($timeslot);
     my $prev_height = $prev_block ? $prev_block->height : -1;

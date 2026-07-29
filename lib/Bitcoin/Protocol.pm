@@ -250,10 +250,24 @@ sub cmd_headers {
     return 0;
 }
 
+# Full btc blocks are requested and scanned (exclusive bound) for coinbase upgrades
+# until the (locally known) upgrade stop, but also for pending downgrade payments
+# regardless of the stop: a btc payment for a downgrade committed before the stop may
+# arrive after the stop-utxo spend, and its SPV proof must still be recorded for the
+# burn. The block with the stop-utxo spend itself is included: its transactions before
+# the spending one are still converted.
+sub btc_scan_height {
+    my $first_stop = QBitcoin::Coinbase->first_stop
+        or return UPGRADE_MAX_BLOCKS;
+    return UPGRADE_MAX_BLOCKS if %{QBitcoin::Downgrade::Spv->pending_txids()};
+    my $bound = $first_stop->{btc_block_height} + 1;
+    return $bound < UPGRADE_MAX_BLOCKS ? $bound : UPGRADE_MAX_BLOCKS;
+}
+
 sub request_transactions {
     my $self = shift;
 
-    my ($block) = Bitcoin::Block->find(scanned => 0, height => { "<" => UPGRADE_MAX_BLOCKS }, -sortby => 'height ASC', -limit => 1);
+    my ($block) = Bitcoin::Block->find(scanned => 0, height => { "<" => btc_scan_height() }, -sortby => 'height ASC', -limit => 1);
     if ($block) {
         Debugf("Request block data: %s", $block->hash_hex);
         $self->send_message("getdata", pack("CVa32", 1, MSG_BLOCK, $block->hash));
@@ -318,7 +332,7 @@ sub cmd_block {
         $self->have_block0(1);
     }
 
-    if (!$block->scanned && $block->height && $block->height < UPGRADE_MAX_BLOCKS) {
+    if (!$block->scanned && $block->height && $block->height < btc_scan_height()) {
         if (Bitcoin::Block->find(scanned => 0, height => { "<" => $block->height }, -limit => 1)) {
             Warningf("Received out-of-order block %s height %u, postpone scanning", $block->hash_hex, $block->height);
         }
@@ -387,18 +401,39 @@ sub process_transactions {
     }
     # Pending downgrade payments to recognize in this block (committed btc txid).
     my $pending_downgrade = QBitcoin::Downgrade::Spv->pending_txids();
+    # The upgrade stop boundary is a btc transaction: burns before the stop-utxo spending
+    # transaction are converted (even in the same block); the spending transaction itself
+    # (including its own burn outputs) and everything after it are not
+    my $first_stop = QBitcoin::Coinbase->first_stop;
+    my $stopped = $first_stop && $block->height > $first_stop->{btc_block_height} ? 1 : 0;
     for (my $i = 0; $i < $tx_num; $i++) {
         my $tx = $block->transactions->[$i];
-        for (my $num = 0; $num < @{$tx->out}; $num++) {
-            if ($config->{produce}) {
-                # replace open_script to upgrade
-                QBitcoin::Produce->produce_coinbase($tx, $num);
+        $stopped = 1 if $first_stop && $block->height == $first_stop->{btc_block_height} && $i >= $first_stop->{btc_tx_num};
+        if (!$stopped && %{&UPGRADE_STOP_UTXO}) {
+            for (my $in_num = 0; $in_num < @{$tx->in}; $in_num++) {
+                my $in = $tx->in->[$in_num];
+                my $utxo = UPGRADE_STOP_UTXO->{$in->{tx_out} . pack("V", $in->{num})}
+                    or next;
+                Warningf("Upgrade stop utxo %s spent in btc tx %s block %s height %u; btc->qbt conversion stops",
+                    $utxo, $tx->hash_hex, $block->hash_hex, $block->height);
+                QBitcoin::Coinbase->add_stop_spend($block, $i, $in_num);
+                $stopped = 1;
+                last;
             }
-            if (my $scripthash = QBitcoin::Coinbase->get_scripthash($tx, $num)) {
-                add_coinbase($block, $i, $num, $scripthash);
+        }
+        if (!$stopped) {
+            for (my $num = 0; $num < @{$tx->out}; $num++) {
+                if ($config->{produce}) {
+                    # replace open_script to upgrade
+                    QBitcoin::Produce->produce_coinbase($tx, $num);
+                }
+                if (my $scripthash = QBitcoin::Coinbase->get_scripthash($tx, $num)) {
+                    add_coinbase($block, $i, $num, $scripthash);
+                }
             }
         }
         # This BTC transaction funds a pending downgrade: record its SPV proof.
+        # Not gated by the upgrade stop: the downgrade was committed earlier in the qbt chain.
         if (my $downgrade_tx_id = $pending_downgrade->{$tx->hash}) {
             Infof("Detected BTC payment for downgrade tx_id %u: btc tx %s", $downgrade_tx_id, $tx->hash_hex);
             QBitcoin::Downgrade::Spv->create(
