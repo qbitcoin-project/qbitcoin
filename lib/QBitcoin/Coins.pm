@@ -120,7 +120,7 @@ sub _upgrade_ended {
     return 1 if Bitcoin::Block->upgrade_stopped(timeslot($block->time));
     return 0 if $block->height < 1;
     my ($prev) = QBitcoin::Block->find(height => $block->height - 1);
-    return $prev && ($prev->upgraded // 0) >= UPGRADE_MAX_VALUE ? 1 : 0;
+    return $prev && (($prev->upgraded // 0) >= UPGRADE_MAX_VALUE || $prev->upgrade_stopped) ? 1 : 0;
 }
 
 # The lowest height at which the static reward becomes non-zero, or undef if the
