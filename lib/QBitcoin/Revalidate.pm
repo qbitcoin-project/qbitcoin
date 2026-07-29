@@ -39,6 +39,7 @@ sub revalidate {
                 }
             }
             my $upgraded = $block->upgraded;
+            my $upgrade_stopped = $block->upgrade_stopped // 0;
             my $reward_fund = $block->reward_fund;
             my $size = $block->size;
             my $min_fee = $block->min_fee;
@@ -71,6 +72,7 @@ sub revalidate {
                      $block->validate() ||
                      $block->validate_chain() ||
                      $block->upgraded != $upgraded ||
+                     ($block->upgrade_stopped // 0) != $upgrade_stopped ||
                      $block->reward_fund != $reward_fund ||
                      $block->size != $size ||
                      $block->min_fee != $min_fee) {

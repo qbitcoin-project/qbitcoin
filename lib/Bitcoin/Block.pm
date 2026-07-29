@@ -133,6 +133,10 @@ sub tx_hashes {
 
 my $upgrade_stopped_block;
 
+# The static (UPGRADE_MAX_BLOCKS) upgrade stop only. The dynamic stop on a spend of an
+# UPGRADE_STOP_UTXO output is a consensus event committed to the qbt blockchain as a
+# TX_TYPE_UPGRADE_STOP transaction and tracked per branch as $block->upgrade_stopped;
+# it must not depend on the local btc scan state.
 sub upgrade_stopped {
     my $class = shift;
     my ($timeslot) = @_;
@@ -149,6 +153,7 @@ sub update_btc_stopped {
     }
 }
 
+# Called on btc blockchain reorg around the static stop height
 sub reset_upgrade_stopped {
     $upgrade_stopped_block = undef;
 }
