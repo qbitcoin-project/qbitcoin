@@ -5,6 +5,17 @@ use feature 'state';
 
 use QBitcoin::Const;
 
+# Spending any of these BTC UTXOs stops the btc->qbt conversion: coinbase upgrades are
+# not allowed starting from the spending btc transaction (in btc order, including its
+# own outputs); burns in earlier transactions of the same block are still converted.
+# Keys are "txid:vout" with txid in display (RPC) byte order; compiled to binary prevout keys.
+sub _stop_utxo_set {
+    return { map {
+        my ($txid, $vout) = split /:/;
+        scalar(reverse pack("H*", $txid)) . pack("V", $vout) => $_
+    } @_ };
+}
+
 use constant MAINNET => {
     GENESIS_HASH       => pack("H*", ""),
     QBT_LOCK_PUBKEY    => pack("H*", "03c3fe5cc51c8c1d6b04ec0fe00d3487863c0eec33ac6360095700868d66de19ff"),
@@ -29,6 +40,9 @@ use constant MAINNET => {
     BTC_P2SH_VER       => 0x05,
     BTC_BECH32_HRP     => "bc",
     UPGRADE_FINISHED   => 0,
+    UPGRADE_STOP_UTXO  => _stop_utxo_set(
+        # "txid:vout"
+    ),
     CHECKPOINTS        => {
         # height => pack('H*', "block_hash_hex"),
     },
@@ -57,6 +71,7 @@ use constant TESTNET => {
     BTC_P2SH_VER       => 0xC4,
     BTC_BECH32_HRP     => "tb",
     UPGRADE_FINISHED   => 0,
+    UPGRADE_STOP_UTXO  => _stop_utxo_set(),
     CHECKPOINTS        => {},
 };
 use constant REGTEST => {
@@ -69,6 +84,10 @@ use constant REGTEST => {
     BTC_P2SH_VER       => 0xC4,
     BTC_BECH32_HRP     => "bcrt",
     UPGRADE_FINISHED   => 0,
+    UPGRADE_STOP_UTXO  => _stop_utxo_set(
+        # block 9 coinbase, the first ever spent satoshi's coins; arbitrary value for regtest
+        "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0",
+    ),
     CHECKPOINTS        => {},
 };
 use constant COMMON_CONST => {
