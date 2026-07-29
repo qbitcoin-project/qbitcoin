@@ -124,6 +124,7 @@ use constant TX_TYPES_CONST => {
     TX_TYPE_SLASHING => 5,
     TX_TYPE_BURN     => 6,
     TX_TYPE_DOWNGRADE => 7,
+    TX_TYPE_UPGRADE_STOP => 8, # SPV proof of an UPGRADE_STOP_UTXO spend; stops the btc->qbt conversion
 };
 
 use constant CRYPT_ALGO => {

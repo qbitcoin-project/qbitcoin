@@ -21,7 +21,7 @@ use QBitcoin::Slashing::Stored;
 use QBitcoin::Downgrade;
 use QBitcoin::Downgrade::Commitment;
 use QBitcoin::Downgrade::Spv;
-use QBitcoin::ValueUpgraded qw(level_by_total downgrade_net downgrade_value_at_level);
+use QBitcoin::ValueUpgraded qw(level_by_total upgrade_value downgrade_net downgrade_value_at_level);
 use QBitcoin::ConnectionList;
 use QBitcoin::Notify;
 use QBitcoin::ProtocolState qw(skip_scripts blockchain_synced);
@@ -220,6 +220,14 @@ sub receive {
             $in->{txo}->spent_del($self);
         }
         return -1;
+    }
+
+    # A coinbase at or after the locally known stop-utxo spend can never be confirmed;
+    # ignore it silently and do not store its record (no punishment for the sender:
+    # it may not have seen the spend yet)
+    if ($self->is_coinbase && $self->up && $self->up->after_stop) {
+        Debugf("Ignore coinbase transaction %s at or after the upgrade stop", $self->hash_str);
+        return undef; # ignored, not invalid
     }
 
     # Admission control: check if mempool has room for this tx
@@ -451,14 +459,37 @@ sub cleanup_mempool {
             if ($tx->up->tx_out) {
                 $drop = "already spent in " . $tx->hash_str($tx->up->tx_out);
             }
+            elsif ($tx->up->after_stop) {
+                $drop = "at or after the upgrade stop";
+            }
             elsif (my $best = QBitcoin::Block->best_block) {
                 if (($best->upgraded // 0) >= UPGRADE_MAX_VALUE) {
                     $drop = "upgrade threshold reached";
+                }
+                elsif ($best->upgrade_stopped) {
+                    $drop = "upgrade stopped";
                 }
             }
             if ($drop) {
                 if ($tx->drop()) {
                     Infof("Drop coinbase tx %s from mempool: %s", $tx->hash_str, $drop);
+                }
+            }
+            next;
+        }
+        if ($tx->is_upgrade_stop) {
+            my $drop;
+            if ($tx->up->tx_out) {
+                $drop = "already published in " . $tx->hash_str($tx->up->tx_out);
+            }
+            elsif (my $best = QBitcoin::Block->best_block) {
+                if ($best->upgrade_stopped) {
+                    $drop = "upgrade already stopped in the best branch";
+                }
+            }
+            if ($drop) {
+                if ($tx->drop()) {
+                    Infof("Drop upgrade stop tx %s from mempool: %s", $tx->hash_str, $drop);
                 }
             }
             next;
@@ -577,6 +608,9 @@ sub serialize {
     $data .= serialize_output($_) foreach @{$self->out};
     if (my $coinbase = $self->is_coinbase) {
         $data .= UPGRADE_POW ? varint($self->upgrade_level) . serialize_coinbase($self->up) : pack("Q<", $self->coins_created);
+    }
+    elsif ($self->is_upgrade_stop) {
+        $data .= serialize_coinbase($self->up); # SPV proof of the stop-utxo spend
     }
     return $data;
 }
@@ -891,6 +925,10 @@ sub deserialize {
             $up = unpack("Q<", $data->get(8) // return undef);
         }
     }
+    elsif ($tx_type == TX_TYPE_UPGRADE_STOP) {
+        $up = QBitcoin::Coinbase->deserialize_stop($data) // return undef;
+        $upgrade_level = 0;
+    }
     my $end_index = $data->index;
     $data->index = $start_index;
     my $tx_raw_data = $data->get($end_index - $start_index);
@@ -1125,6 +1163,7 @@ sub is_tokens   { $_[0]->{tx_type} == TX_TYPE_TOKENS   }
 sub is_slashing { $_[0]->{tx_type} == TX_TYPE_SLASHING }
 sub is_burn     { $_[0]->{tx_type} == TX_TYPE_BURN     }
 sub is_downgrade { $_[0]->{tx_type} == TX_TYPE_DOWNGRADE }
+sub is_upgrade_stop { $_[0]->{tx_type} == TX_TYPE_UPGRADE_STOP }
 
 # Serialized downgrade payload placed right after tx_type: the commitment for a
 # DOWNGRADE transaction, the BTC SPV proof for a BURN transaction.
@@ -1171,6 +1210,30 @@ sub validate_coinbase {
         Warningf("Coinbase denied, invalid transaction %s", $self->hash_str);
         return -1 unless $config->{fake_coinbase};
     }
+    return 0;
+}
+
+# TX_TYPE_UPGRADE_STOP: SPV proof that one of UPGRADE_STOP_UTXO outputs was spent in the
+# btc blockchain; once confirmed it permanently stops the btc->qbt conversion in its branch.
+# The transaction is fully deterministic given the proof: no inputs, no outputs, no fee.
+# The spent prevout is matched against UPGRADE_STOP_UTXO in Coinbase::deserialize_stop.
+sub validate_upgrade_stop {
+    my $self = shift;
+    if (!UPGRADE_POW) {
+        Warningf("Upgrade stop denied, invalid transaction %s", $self->hash_str);
+        return -1;
+    }
+    if (@{$self->in} || @{$self->out}) {
+        Warningf("Upgrade stop transaction %s must have no inputs and no outputs", $self->hash_str);
+        return -1;
+    }
+    my $stop = $self->up;
+    if (!$stop || !$stop->upgrade_stop) {
+        Warningf("Upgrade stop transaction %s has no stop-utxo spend proof", $self->hash_str);
+        return -1;
+    }
+    $stop->validate() == 0
+        or return -1;
     return 0;
 }
 
@@ -1239,6 +1302,14 @@ sub validate {
             return -1;
         }
         return $self->validate_coinbase;
+    }
+    if ($self->is_upgrade_stop) {
+        return 0 if skip_scripts();
+        if (UPGRADE_FINISHED) {
+            Warningf("Upgrade stop transaction %s rejected: upgrade finished", $self->hash_str);
+            return -1;
+        }
+        return $self->validate_upgrade_stop;
     }
     # The genesis-reward balance rule applies to every transaction type that spends inputs
     if (!skip_scripts()) {
@@ -1678,6 +1749,18 @@ sub pre_load {
             }
             $attr->{in} = [];
         }
+        elsif ($attr->{tx_type} == TX_TYPE_UPGRADE_STOP) {
+            my $upgrade = QBitcoin::Coinbase->load_stored_coinbase($attr->{id}, $attr->{hash});
+            if ($upgrade) {
+                $attr->{up} = $upgrade;
+                $attr->{upgrade_level} = $upgrade->upgrade_level // 0;
+                $attr->{up_value} = 0;
+            }
+            else {
+                Errf("No stop-utxo spend record for transaction %s", lc unpack("H*", substr($attr->{hash}, 0, 4)));
+            }
+            $attr->{in} = [];
+        }
         else {
             my @in_txo = QBitcoin::TXO->load_stored_inputs($attr->{id}, $attr->{hash});
             my @inputs;
@@ -2013,6 +2096,60 @@ sub new_coinbase {
         Infof("Generated new coinbase transaction %s for btc output %s:%u value %lu fee %lu",
             $self->hash_str, $class->hash_str($coinbase->btc_tx_hash), $coinbase->btc_out_num,
             $txo->value, $self->fee);
+        $self->announce();
+    }
+    return $self;
+}
+
+# The upgrade stop transaction weighs as much as a coinbase upgrading the whole
+# remaining conversion quota (UPGRADE_MAX_VALUE - upgraded before the marker).
+# This makes suppressing the marker unprofitable: a branch which omits it and keeps
+# including post-spend coinbases can never extract more upgrade weight than the
+# honest branch gets from the marker alone.
+sub upgrade_stop_weight {
+    my $self = shift;
+    my ($block_time, $upgraded) = @_;
+    my $stop = $self->up
+        or return 0;
+    my $remaining_btc = UPGRADE_MAX_VALUE > $upgraded ? UPGRADE_MAX_VALUE - $upgraded : 0;
+    my $virtual_value = upgrade_value($remaining_btc, level_by_total($upgraded));
+    my $confirm_time = $stop->btc_confirm_time // return 0;
+    my $base_time = timeslot($confirm_time);
+    my $virtual_time = timeslot($confirm_time - COINBASE_WEIGHT_TIME); # MB negative, it's ok
+    # Scale down by 0x10000 before applying the time factors: the whole remaining quota
+    # at once would hit the MAX_INT64 clamp of the coinbase_weight() formula, and then
+    # many small coinbases would outweigh the single marker
+    my $weight = $virtual_value / 0x10000 * ($base_time - $virtual_time) / BLOCK_INTERVAL;
+    $weight *= ($base_time - $virtual_time) / (timeslot($block_time) - $virtual_time);
+    $weight = MAX_INT64 if $weight > MAX_INT64;
+    return int($weight);
+}
+
+# Create a transaction for a stored stop-utxo spend record
+sub new_upgrade_stop {
+    my $class = shift;
+    my ($stop) = @_;
+
+    my $self = $class->new(
+        in            => [],
+        out           => [],
+        up            => $stop,
+        tx_type       => TX_TYPE_UPGRADE_STOP,
+        fee           => 0,
+        received_time => time(),
+        upgrade_level => 0,
+    );
+    $self->calculate_hash;
+    if (my $cached = $class->get($self->hash)) {
+        Debugf("Upgrade stop transaction %s for btc tx %s already in %s",
+            $self->hash_str, $class->hash_str($stop->btc_tx_hash),
+            $cached->block_height ? "blockchain" : "mempool");
+        $self = $cached;
+    }
+    else {
+        $self->save(); # Add upgrade stop tx to mempool
+        Warningf("Generated upgrade stop transaction %s for btc tx %s: btc->qbt conversion stops",
+            $self->hash_str, $class->hash_str($stop->btc_tx_hash));
         $self->announce();
     }
     return $self;

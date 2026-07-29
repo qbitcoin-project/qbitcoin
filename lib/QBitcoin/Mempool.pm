@@ -13,6 +13,7 @@ use QBitcoin::Log;
 use QBitcoin::ValueUpgraded qw(level_by_total);
 use QBitcoin::MinFee qw(min_fee);
 use QBitcoin::Transaction;
+use QBitcoin::Coinbase;
 
 use constant {
     MAX_PACKAGE_TX       => 64,  # max txs in a package (tx + its unconfirmed ancestors)
@@ -31,6 +32,7 @@ sub choose_for_block {
     my ($size, $block_time, $prev_block, $can_consume, $branch_only) = @_;
     my $block_height = $prev_block ? $prev_block->height+1 : 0;
     my $upgraded_total = $prev_block ? $prev_block->upgraded : 0;
+    my $upgrade_stopped = $prev_block ? $prev_block->upgrade_stopped // 0 : 0;
     # $branch_only: take transactions only from the branch on top of $prev_block, not from
     # the mempool. Used when contesting a block in a past slot, so the mempool stays free
     # for the block in the current timeslot built on top (see QBitcoin::Generate).
@@ -59,19 +61,25 @@ sub choose_for_block {
     my %in_block; # hashes of selected transactions
     my @selected;
 
-    # Coinbase, burn and slashing transactions go first: the block layout enforced by
-    # Block::Validate (stake, coinbase(s), burn(s), slashing(s), standard); they are also
-    # exempt from the min_fee limit there.
-    my @front    = sort { compare_tx() } grep {   $_->is_coinbase || $_->is_burn || $_->is_slashing  } @mempool;
-    my @standard =                       grep { !($_->is_coinbase || $_->is_burn || $_->is_slashing) } @mempool;
+    # Coinbase, upgrade_stop, burn, downgrade and slashing transactions go first:
+    # the block layout enforced by Block::Validate (stake, coinbase(s), upgrade_stop,
+    # burn(s) and downgrade(s), slashing(s), standard); they are also exempt from the
+    # min_fee limit there.
+    my @front    = sort { compare_tx() } grep {   _is_front($_) } @mempool;
+    my @standard =                       grep { !_is_front($_) } @mempool;
 
     foreach my $tx (@front) {
         if ($size + $tx->size > MAX_BLOCK_SIZE || $tx_in_block + 1 > MAX_TX_IN_BLOCK) {
             return @selected; # block is full
         }
         if (UPGRADE_POW && $tx->is_coinbase) {
-            next if $upgraded_total >= UPGRADE_MAX_VALUE;
+            next if $upgraded_total >= UPGRADE_MAX_VALUE || $upgrade_stopped;
             my $coinbase = $tx->up;
+            # Do not build on coinbases at or after the locally known stop-utxo spending
+            # transaction: such a block would be rejected by every node which has seen the
+            # spend. Such coinbases can stay in the mempool if they were received before
+            # the stop became known.
+            next if $coinbase->after_stop;
             if ($coinbase->tx_out && $coinbase->tx_out ne $tx->hash) {
                 # Already confirmed spent with another upgrade level
                 Debugf("Coinbase tx %s already spent in confirmed tx %s",
@@ -92,6 +100,16 @@ sub choose_for_block {
             my $key = $coinbase->btc_tx_hash . pack("S", $coinbase->btc_out_num);
             next if exists $spent{$key}; # spent in previous mempool transaction
             $spent{$key} = 1;
+        }
+        elsif ($tx->is_upgrade_stop) {
+            my $stop = $tx->up;
+            next if $upgrade_stopped || !UPGRADE_POW
+                || ($stop->tx_out && $stop->tx_out ne $tx->hash);
+            $upgrade_stopped = 1;
+        }
+        elsif ($tx->is_downgrade && $upgrade_stopped) {
+            # New downgrades stop together with upgrades
+            next;
         }
         next if _obstructed($tx, $block_height, \%spent, \%in_block);
         foreach my $in (@{$tx->in}) {
@@ -352,12 +370,21 @@ sub _insert_rate {
     splice(@$rates, _count_below($rates, $rate + 1), 0, $rate);
 }
 
+# Transaction types placed before the standard ones in the block; they are selected
+# without the package logic: a burn or downgrade depending on an unconfirmed standard
+# transaction can not be included anyway (the block layout puts it before the standard
+# ones), and they are built on confirmed inputs, so such a dependency is not expected
+sub _is_front {
+    my ($tx) = @_;
+    return $tx->is_coinbase || $tx->is_upgrade_stop || $tx->is_burn || $tx->is_downgrade || $tx->is_slashing;
+}
+
 sub compare_tx {
-    # coinbase first, then burn and downgrade, then slashing, then standard: the block layout enforced by
-    # Block::Validate (stake, coinbase(s), burn(s), slashing(s), standard)
+    # coinbase first, then upgrade_stop, then burn and downgrade, then slashing, then standard: the block layout enforced by
+    # Block::Validate (stake, coinbase(s), upgrade_stop, burn(s) and downgrade(s), slashing(s), standard)
     return
-        ( $a->is_coinbase ? 0 : $a->is_burn || $a->is_downgrade ? 1 : $a->is_slashing ? 2 : 3 ) <=>
-            ( $b->is_coinbase ? 0 : $b->is_burn || $a->is_downgrade ? 1 : $b->is_slashing ? 2 : 3 ) ||
+        ( $a->is_coinbase ? 0 : $a->is_upgrade_stop ? 1 : $a->is_burn || $a->is_downgrade ? 2 : $a->is_slashing ? 3 : 4 ) <=>
+            ( $b->is_coinbase ? 0 : $b->is_upgrade_stop ? 1 : $b->is_burn || $b->is_downgrade ? 2 : $b->is_slashing ? 3 : 4 ) ||
         ( $a->up && $b->up ? (
             ($a->up->btc_block_height // 0) <=> ($b->up->btc_block_height // 0) ||
             ($a->up->btc_tx_num       // 0) <=> ($b->up->btc_tx_num       // 0) ||

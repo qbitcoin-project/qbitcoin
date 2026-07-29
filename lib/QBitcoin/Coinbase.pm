@@ -25,7 +25,7 @@ use constant TABLE => 'coinbase';
 use constant FIELDS => {
     btc_block_height => NUMERIC,
     btc_tx_num       => NUMERIC,
-    btc_out_num      => NUMERIC,
+    btc_out_num      => NUMERIC, # for upgrade_stop entries: input index of the stop-utxo spend
     btc_tx_hash      => BINARY,
     btc_tx_data      => BINARY,
     merkle_path      => BINARY,
@@ -33,11 +33,20 @@ use constant FIELDS => {
     scripthash       => NUMERIC,
     tx_out           => NUMERIC,
     upgrade_level    => NUMERIC,
+    upgrade_stop     => NUMERIC, # 1 for a stop-utxo spend record (TX_TYPE_UPGRADE_STOP payload), 0 for a regular coinbase
 };
 
 mk_accessors(keys %{&FIELDS});
 
 my %COINBASE; # just short-live cache for recently produced entries
+
+# upgrade_stop records share the table (and the strict btc ordering) with regular
+# coinbases but live in their own key namespace: btc_out_num of a marker is an input
+# index and may collide with a burn output of the same btc transaction
+sub _cache_key {
+    my ($self) = @_; # object or hashref
+    return $self->{btc_tx_hash} . $self->{btc_out_num} . ($self->{upgrade_stop} ? "s" : "");
+}
 
 sub ensure_btc_block {
     my $self = shift;
@@ -67,18 +76,30 @@ sub store {
         btc_block_height => $self->btc_block_height,
         btc_tx_num       => $self->btc_tx_num,
         btc_out_num      => $self->btc_out_num,
+        upgrade_stop     => $self->upgrade_stop ? 1 : 0,
     );
     if ($coinbase) {
         $self->{tx_out} //= $coinbase->{tx_out};
         return;
     }
     $self->ensure_btc_block();
-    my $scripthash = QBitcoin::RedeemScript->store($self->scripthash);
-    my $sql = "INSERT INTO `" . TABLE . "` (btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, btc_tx_data, merkle_path, value, scripthash, tx_out, upgrade_level) VALUES (?,?,?,UNHEX(?),UNHEX(?),UNHEX(?),?,?,NULL,?)";
-    DEBUG_ORM && Debugf("dbi [%s] values [%u,%u,%u,%s,%s,%s,%lu,%u,%u]", $sql, $self->btc_block_height, $self->btc_tx_num, $self->btc_out_num, for_log($self->btc_tx_hash), for_log($self->btc_tx_data), for_log($self->merkle_path), $self->value, $scripthash->id, $self->upgrade_level);
-    my $res = dbh->do($sql, undef, $self->btc_block_height, $self->btc_tx_num, $self->btc_out_num, unpack("H*", $self->btc_tx_hash), unpack("H*", $self->btc_tx_data), unpack("H*", $self->merkle_path), $self->value, $scripthash->id, $self->upgrade_level);
+    # upgrade_stop records have no destination output, so no scripthash
+    my $scripthash_id = defined($self->scripthash) ? QBitcoin::RedeemScript->store($self->scripthash)->id : undef;
+    my $sql = "INSERT INTO `" . TABLE . "` (btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, btc_tx_data, merkle_path, value, scripthash, tx_out, upgrade_level, upgrade_stop) VALUES (?,?,?,UNHEX(?),UNHEX(?),UNHEX(?),?,?,NULL,?,?)";
+    DEBUG_ORM && Debugf("dbi [%s] values [%u,%u,%u,%s,%s,%s,%lu,%s,%u,%u]", $sql, $self->btc_block_height, $self->btc_tx_num, $self->btc_out_num, for_log($self->btc_tx_hash), for_log($self->btc_tx_data), for_log($self->merkle_path), $self->value, $scripthash_id // "null", $self->upgrade_level, $self->upgrade_stop ? 1 : 0);
+    my $res = dbh->do($sql, undef, $self->btc_block_height, $self->btc_tx_num, $self->btc_out_num, unpack("H*", $self->btc_tx_hash), unpack("H*", $self->btc_tx_data), unpack("H*", $self->merkle_path), $self->value, $scripthash_id, $self->upgrade_level, $self->upgrade_stop ? 1 : 0);
     $res == 1
         or die "Can't store coinbase " . $self->btc_tx_num . ":" . $self->btc_out_num . ": " . (dbh->errstr // "no error") . "\n";
+    if ($self->upgrade_stop) {
+        # A new stop record (from the btc scan or received with a TX_TYPE_UPGRADE_STOP
+        # transaction from a peer) changes the locally known stop position.
+        # Unconfirmed coinbase records at or after the stop can never be confirmed;
+        # such records exist if a peer relayed the coinbase before the stop became known
+        my $sql_del = "DELETE FROM `" . TABLE . "` WHERE upgrade_stop = 0 AND tx_out IS NULL"
+            . " AND (btc_block_height > ? OR (btc_block_height = ? AND btc_tx_num >= ?))";
+        dbh->do($sql_del, undef, $self->btc_block_height, $self->btc_block_height, $self->btc_tx_num);
+        $class->reset_stop_cache;
+    }
 }
 
 sub get_value {
@@ -101,16 +122,20 @@ sub store_published {
     my $self = shift;
     my ($tx) = @_;
 
-    my $sql = "UPDATE `" . TABLE . "` SET tx_out = ?, upgrade_level = ?, value = ? WHERE btc_tx_hash = UNHEX(?) AND btc_out_num = ? AND tx_out IS NULL";
-    DEBUG_ORM && Debugf("dbi [%s] values [%u,%u,%lu,%s,%u]", $sql, $tx->id, $self->upgrade_level, $self->value, for_log($self->btc_tx_hash), $self->btc_out_num);
-    my $res = dbh->do($sql, undef, $tx->id, $self->upgrade_level, $self->value, unpack("H*", $self->btc_tx_hash), $self->btc_out_num);
+    my $sql = "UPDATE `" . TABLE . "` SET tx_out = ?, upgrade_level = ?, value = ? WHERE btc_tx_hash = UNHEX(?) AND btc_out_num = ? AND upgrade_stop = ? AND tx_out IS NULL";
+    DEBUG_ORM && Debugf("dbi [%s] values [%u,%u,%lu,%s,%u,%u]", $sql, $tx->id, $self->upgrade_level, $self->value, for_log($self->btc_tx_hash), $self->btc_out_num, $self->upgrade_stop ? 1 : 0);
+    my $res = dbh->do($sql, undef, $tx->id, $self->upgrade_level, $self->value, unpack("H*", $self->btc_tx_hash), $self->btc_out_num, $self->upgrade_stop ? 1 : 0);
     $res == 1
         or die "Can't store coinbase " . for_log($self->btc_tx_hash) . ":" . $self->btc_out_num . " as processed: " . (dbh->errstr // "no error") . "\n";
+    $self->reset_stop_confirmed if $self->upgrade_stop;
 }
 
 sub value_btc {
     my $self = shift; # object or hashref
     return $self->{value_btc} if defined $self->{value_btc};
+    # upgrade_stop record proves an input spend, it carries no value
+    # (and its btc_out_num is an input index, not an output one)
+    return 0 if $self->{upgrade_stop};
     my $btc_tx_data_obj = Bitcoin::Serialized->new($self->{btc_tx_data});
     my $btc_transaction = Bitcoin::Transaction->deserialize($btc_tx_data_obj);
     my $out = $btc_transaction->out->[$self->{btc_out_num}];
@@ -137,13 +162,21 @@ sub get_new {
     # TODO: move this to QBitcoin::ORM
     my $sql = "SELECT btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, btc_tx_data, merkle_path, value, s.hash as scripthash";
     $sql .= " FROM `" . $class->TABLE . "` AS t JOIN `" . QBitcoin::RedeemScript->TABLE . "` AS s ON (t.scripthash = s.id)";
-    $sql .= " WHERE tx_out IS NULL AND btc_block_height <= ?";
+    $sql .= " WHERE tx_out IS NULL AND upgrade_stop = 0 AND btc_block_height <= ?";
+    my @values = ($max_height);
+    # Never generate upgrades at or after the locally known stop-utxo spend; such records
+    # should not exist, but a reorg of a branch confirmed before the stop became known
+    # may return one to the unconfirmed state
+    if (my $first_stop = $class->first_stop) {
+        $sql .= " AND (btc_block_height < ? OR (btc_block_height = ? AND btc_tx_num < ?))";
+        push @values, $first_stop->{btc_block_height}, $first_stop->{btc_block_height}, $first_stop->{btc_tx_num};
+    }
     my $sth = dbh->prepare($sql);
-    DEBUG_ORM && Debugf("sql: [%s] values [%u]", $sql, $max_height);
-    $sth->execute($max_height);
+    DEBUG_ORM && Debugf("sql: [%s] values [%s]", $sql, join(",", @values));
+    $sth->execute(@values);
     my @coinbase;
     while (my $hash = $sth->fetchrow_hashref()) {
-        my $key = $hash->{btc_tx_hash} . $hash->{btc_out_num};
+        my $key = _cache_key($hash);
         next if defined($COINBASE{$key}); # transaction for this coinbase already generated (but not stored yet)
         $hash->{value_btc} = value_btc($hash);
         my $coinbase = $class->new($hash);
@@ -155,10 +188,42 @@ sub get_new {
     return @coinbase;
 }
 
+# The earliest stored stop-utxo spend record without a published TX_TYPE_UPGRADE_STOP
+# transaction, if its btc block is mature enough; the producer builds the marker tx from it
+sub get_new_stop {
+    my $class = shift;
+    my ($time) = @_;
+
+    return undef unless %{&UPGRADE_STOP_UTXO};
+    return undef unless $class->first_stop;
+    my ($matched_block) = Bitcoin::Block->find(
+        time    => { '<' => $time - COINBASE_CONFIRM_TIME },
+        -sortby => 'height DESC',
+        -limit  => 1,
+    );
+    return undef unless $matched_block;
+    my $max_height = $matched_block->height - COINBASE_CONFIRM_BLOCKS;
+    my $sql = "SELECT btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, btc_tx_data, merkle_path, value, upgrade_level, upgrade_stop";
+    $sql .= " FROM `" . $class->TABLE . "` WHERE tx_out IS NULL AND upgrade_stop = 1 AND btc_block_height <= ?";
+    $sql .= " ORDER BY btc_block_height ASC, btc_tx_num ASC, btc_out_num ASC LIMIT 1";
+    my $sth = dbh->prepare($sql);
+    DEBUG_ORM && Debugf("sql: [%s] values [%u]", $sql, $max_height);
+    $sth->execute($max_height);
+    my $hash = $sth->fetchrow_hashref()
+        or return undef;
+    my $key = _cache_key($hash);
+    return $COINBASE{$key} if defined($COINBASE{$key});
+    $hash->{value_btc} = 0;
+    my $coinbase = $class->new($hash);
+    $COINBASE{$key} = $coinbase;
+    weaken($COINBASE{$key});
+    return $coinbase;
+}
+
 sub DESTROY {
     my $self = shift;
     # weaken() only undefine value but do not delete it, so do it from the object destructor
-    my $key = $self->{btc_tx_hash} . $self->{btc_out_num};
+    my $key = _cache_key($self);
     if (!defined($COINBASE{$key}) || refaddr($self) == refaddr($COINBASE{$key})) {
         delete $COINBASE{$key};
     }
@@ -172,8 +237,8 @@ sub load_stored_coinbase {
     my $class = shift;
     my ($tx_id, $tx_hash) = @_;
     # TODO: move this to QBitcoin::ORM
-    my $sql = "SELECT btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, btc_tx_data, merkle_path, value, s.hash as scripthash, upgrade_level";
-    $sql .= " FROM `" . $class->TABLE . "` AS t JOIN `" . QBitcoin::RedeemScript->TABLE . "` AS s ON (t.scripthash = s.id)";
+    my $sql = "SELECT btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, btc_tx_data, merkle_path, value, s.hash as scripthash, upgrade_level, upgrade_stop";
+    $sql .= " FROM `" . $class->TABLE . "` AS t LEFT JOIN `" . QBitcoin::RedeemScript->TABLE . "` AS s ON (t.scripthash = s.id)";
     $sql .= " WHERE tx_out = ?";
     my $sth = dbh->prepare($sql);
     DEBUG_ORM && Debugf("sql: [%s] values [%u]", $sql, $tx_id);
@@ -237,8 +302,9 @@ sub as_hashref {
         btc_tx_data      => unpack("H*", $self->btc_tx_data),
         merkle_path      => unpack("H*", $self->merkle_path),
         value            => $value / DENOMINATOR,
-        scripthash       => unpack("H*", $self->scripthash),
-        upgrade_level    => $self->upgrade_level+0,
+        scripthash       => defined($self->scripthash) ? unpack("H*", $self->scripthash) : undef,
+        upgrade_level    => ($self->upgrade_level // 0)+0,
+        $self->upgrade_stop ? ( upgrade_stop => 1 ) : (),
     };
 }
 
@@ -392,6 +458,55 @@ sub deserialize {
     return $coinbase;
 }
 
+# Deserialize the payload of a TX_TYPE_UPGRADE_STOP transaction.
+# Same wire format as a coinbase payload, but btc_out_num is the index of the
+# transaction input which spends one of UPGRADE_STOP_UTXO outputs.
+sub deserialize_stop {
+    my $class = shift;
+    my ($data) = @_;
+    my $btc_block_height = $data->get_varint() // return undef;
+    my $btc_block_hash   = $data->get(32)      // return undef;
+    my $btc_tx_num  = $data->get_varint() // return undef;
+    my $btc_in_num  = $data->get_varint() // return undef;
+    my $btc_tx_data = $data->get_string() // return undef;
+    my $merkle_path = $data->get_string() // return undef;
+    my $btc_tx_data_obj = Bitcoin::Serialized->new($btc_tx_data);
+    my $transaction = Bitcoin::Transaction->deserialize($btc_tx_data_obj);
+    if (!$transaction || $btc_tx_data_obj->length) {
+        Warningf("Incorrect btc transaction data in upgrade stop");
+        return undef;
+    }
+    my $in = $transaction->in->[$btc_in_num];
+    if (!$in) {
+        Warningf("Incorrect btc transaction %s in upgrade stop, no input %u", $transaction->hash_str, $btc_in_num);
+        return undef;
+    }
+    my $utxo = UPGRADE_STOP_UTXO->{$in->{tx_out} . pack("V", $in->{num})};
+    if (!$utxo) {
+        Warningf("Btc transaction %s input %u in upgrade stop does not spend a stop utxo", $transaction->hash_str, $btc_in_num);
+        return undef;
+    }
+    my $stop = $class->new({
+        btc_block_height => $btc_block_height,
+        btc_block_hash   => $btc_block_hash,
+        btc_tx_num       => $btc_tx_num,
+        btc_out_num      => $btc_in_num,
+        btc_tx_data      => $btc_tx_data,
+        btc_tx_hash      => $transaction->hash,
+        merkle_path      => $merkle_path,
+        upgrade_level    => 0,
+        value_btc        => 0,
+        value            => 0,
+        scripthash       => undef,
+        upgrade_stop     => 1,
+    });
+    my $key = _cache_key($stop);
+    return $COINBASE{$key} if defined($COINBASE{$key});
+    $COINBASE{$key} = $stop;
+    weaken($COINBASE{$key});
+    return $stop;
+}
+
 # for serialize loaded blocks
 sub btc_block_hash {
     my $self = shift;
@@ -425,16 +540,22 @@ sub prev {
     my $h = $self->btc_block_height;
     my $t = $self->btc_tx_num;
     my $o = $self->btc_out_num;
-    my $sql = "SELECT btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, tx_out FROM `" . TABLE . "`"
+    # The upgrade stop record is ordered before every coinbase of its btc transaction:
+    # the whole spending transaction (including its own burn outputs) is after the stop
+    # boundary, so the stop is the "prev" for any coinbase of the same transaction
+    my $same_tx_cond = $self->upgrade_stop
+        ? "upgrade_stop = 1 AND btc_out_num < ?"
+        : "(upgrade_stop = 0 AND btc_out_num < ? OR upgrade_stop = 1)";
+    my $sql = "SELECT btc_block_height, btc_tx_num, btc_out_num, btc_tx_hash, tx_out, upgrade_stop FROM `" . TABLE . "`"
         . " WHERE (btc_block_height < ? OR (btc_block_height = ? AND btc_tx_num < ?)"
-        . " OR (btc_block_height = ? AND btc_tx_num = ? AND btc_out_num < ?))"
-        . " ORDER BY btc_block_height DESC, btc_tx_num DESC, btc_out_num DESC LIMIT 1";
+        . " OR (btc_block_height = ? AND btc_tx_num = ? AND $same_tx_cond))"
+        . " ORDER BY btc_block_height DESC, btc_tx_num DESC, upgrade_stop ASC, btc_out_num DESC LIMIT 1";
     my $sth = dbh->prepare($sql);
     $sth->execute($h, $h, $t, $h, $t, $o);
     my $prev = $sth->fetchrow_hashref()
         or return undef;
     # Confirmed but not stored yet?
-    my $key = $prev->{btc_tx_hash} . $prev->{btc_out_num};
+    my $key = _cache_key($prev);
     if (defined($COINBASE{$key})) {
         $prev->{confirmed} = $COINBASE{$key}->tx_out ? 1 : 0;
     }
@@ -448,6 +569,89 @@ sub tx_out_str {
     my $self = shift;
     my $tx_out = $self->tx_out // return undef;
     return unpack("H*", substr($tx_out, 0, 4));
+}
+
+# The btc position (btc_block_height, btc_tx_num) of the first locally known stop-utxo
+# spend, undef if none. It is local knowledge (from the btc scan or a relayed
+# TX_TYPE_UPGRADE_STOP transaction), used for the scan gate and the mempool production
+# filter; the consensus stop is the confirmed TX_TYPE_UPGRADE_STOP transaction.
+# 3-state cache: undef - not computed; 0 - no stop; hashref otherwise.
+my $first_stop;
+
+sub first_stop {
+    my $class = shift;
+    return undef unless %{&UPGRADE_STOP_UTXO};
+    if (!defined $first_stop) {
+        my $sql = "SELECT btc_block_height, btc_tx_num FROM `" . TABLE . "` WHERE upgrade_stop = 1"
+            . " ORDER BY btc_block_height ASC, btc_tx_num ASC LIMIT 1";
+        my $sth = dbh->prepare($sql);
+        $sth->execute();
+        $first_stop = $sth->fetchrow_hashref() // 0;
+    }
+    return $first_stop || undef;
+}
+
+# Called on new stop-utxo spend and on btc reorg (the reorg deletes reverted coinbase
+# rows including the upgrade_stop ones, and the new branch is rescanned)
+sub reset_stop_cache {
+    undef $first_stop;
+}
+
+# True if this coinbase record is at or after the locally known stop-utxo spending
+# transaction (in btc order), so its upgrade can never be confirmed
+sub after_stop {
+    my $self = shift;
+    my $first_stop = QBitcoin::Coinbase->first_stop
+        or return 0;
+    return $self->{btc_block_height} > $first_stop->{btc_block_height}
+        || ($self->{btc_block_height} == $first_stop->{btc_block_height}
+            && $self->{btc_tx_num} >= $first_stop->{btc_tx_num}) ? 1 : 0;
+}
+
+# The qbt block height at which the TX_TYPE_UPGRADE_STOP transaction is confirmed in the
+# stored blockchain (the database keeps only the best branch), undef if none. Used to
+# derive the upgrade_stopped attribute for blocks loaded from the database; in-memory
+# blocks get it from validation. In-core (not yet stored) marker does not affect this:
+# all stored blocks are below it and therefore not stopped.
+# 3-state cache: undef - not computed; -1 - no stop; height otherwise.
+my $stop_confirmed_height;
+
+sub stop_confirmed_height {
+    my $class = shift;
+    return undef unless %{&UPGRADE_STOP_UTXO};
+    if (!defined $stop_confirmed_height) {
+        my ($height) = dbh->selectrow_array("SELECT MIN(t.block_height) FROM `" . TABLE . "` c"
+            . " JOIN `transaction` t ON (c.tx_out = t.id) WHERE c.upgrade_stop = 1");
+        $stop_confirmed_height = $height // -1;
+    }
+    return $stop_confirmed_height < 0 ? undef : $stop_confirmed_height;
+}
+
+# Called when the stored marker transaction appears (block with it is stored) or
+# disappears (deep reorg deletes stored blocks)
+sub reset_stop_confirmed {
+    undef $stop_confirmed_height;
+}
+
+# Store a stop-utxo spend detected by the btc block scan as an upgrade_stop record
+sub add_stop_spend {
+    my $class = shift;
+    my ($block, $tx_num, $in_num) = @_;
+    my $tx = $block->transactions->[$tx_num];
+    my $stop = $class->create(
+        btc_block_height => $block->height,
+        btc_block_hash   => $block->hash,
+        btc_tx_num       => $tx_num,
+        btc_out_num      => $in_num,
+        btc_tx_hash      => $tx->hash,
+        btc_tx_data      => $tx->data,
+        merkle_path      => $block->merkle_path($tx_num),
+        value_btc        => 0,
+        scripthash       => undef,
+        upgrade_stop     => 1,
+    );
+    $class->reset_stop_cache;
+    return $stop;
 }
 
 1;
