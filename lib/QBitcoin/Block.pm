@@ -58,6 +58,20 @@ sub branch_height {
     return $self->height;
 }
 
+# 1 if the branch contains a confirmed TX_TYPE_UPGRADE_STOP transaction at this height
+# or below; it permanently stops the btc->qbt conversion (and new downgrades) in the
+# branch. Derived attribute, not stored in the database: block validation propagates it
+# from the previous block, and for blocks loaded from the database it is derived from
+# the height of the stored marker transaction (the database keeps only the best branch).
+sub upgrade_stopped :lvalue {
+    my $self = $_[0];
+    if (@_ == 1 && !defined $self->{upgrade_stopped}) {
+        my $stop_height = QBitcoin::Coinbase->stop_confirmed_height;
+        $self->{upgrade_stopped} = defined($stop_height) && $self->height >= $stop_height ? 1 : 0;
+    }
+    @_ == 2 ? $self->{upgrade_stopped} = $_[1] : $self->{upgrade_stopped};
+}
+
 # Feerate (satoshi per kb) of the cheapest fee-paying standard or tokens transaction
 # in the block, undef if there are no such transactions.
 # It is the market anchor for the next block min_fee (see QBitcoin::MinFee).
@@ -115,9 +129,18 @@ sub self_weight {
                 my $weight = $stake_weight + @{$self->transactions};
                 my $ok = 1;
                 # coinbase increases block weight
+                my $coinbase_btc = 0;
                 foreach my $transaction (@{$self->transactions}) {
                     if ($transaction->is_coinbase) {
                         $weight += $transaction->coinbase_weight($self->time);
+                        $coinbase_btc += $transaction->up->value_btc if $transaction->up;
+                    }
+                    elsif ($transaction->is_upgrade_stop) {
+                        # weighs as an upgrade of the whole remaining quota; the quota is
+                        # counted before the marker: prev block plus coinbases of this block
+                        # (burns of the same block are ignored by definition)
+                        my $upgraded = ($self->prev_block ? $self->prev_block->upgraded // 0 : 0) + $coinbase_btc;
+                        $weight += $transaction->upgrade_stop_weight($self->time, $upgraded);
                     }
                     elsif ($transaction->is_slashing) {
                         # The slashed stake inputs count toward block weight exactly like
@@ -247,7 +270,7 @@ sub static_reward {
     my $static_reward = 0;
     if ($prev_block) {
         my $timeslot = timeslot($time);
-        if (!UPGRADE_POW || $prev_block->upgraded >= UPGRADE_MAX_VALUE || Bitcoin::Block->upgrade_stopped($timeslot)) {
+        if (!UPGRADE_POW || $prev_block->upgraded >= UPGRADE_MAX_VALUE || $prev_block->upgrade_stopped || Bitcoin::Block->upgrade_stopped($timeslot)) {
             $static_reward = int(STATIC_REWARD / 2**int(($timeslot - GENESIS_TIME) / BLOCK_INTERVAL / REWARD_HALVING));
             $static_reward *= ($timeslot - timeslot($prev_block->time)) / BLOCK_INTERVAL;
         }
@@ -273,6 +296,12 @@ sub reorg_penalty {
     my $upgraded_btc   = $self->upgraded   - $branch_start->upgraded;
     my $downgraded_btc = ($self->downgraded // 0) - ($branch_start->downgraded // 0);
     my $coinbase_btc   = $upgraded_btc + $downgraded_btc; # gross BTC from coinbases
+    if ($self->upgrade_stopped && !$branch_start->upgrade_stopped) {
+        # The upgrade stop marker in the segment weighs as an upgrade of the whole
+        # remaining quota; account it so the estimate matches the actual branch weight
+        # (remaining quota at the marker approximated by the segment end state)
+        $coinbase_btc += UPGRADE_MAX_VALUE - $self->upgraded if UPGRADE_MAX_VALUE > $self->upgraded;
+    }
     my $level_end   = level_by_total($self->upgraded);
     my $level_start = level_by_total($branch_start->upgraded);
     my $coinbase_qbtc = sqrt(upgrade_value($coinbase_btc, $level_end) * upgrade_value($coinbase_btc, $level_start)); # not fully accurate, but good enough for penalty calculation
@@ -304,6 +333,8 @@ sub reorg_penalty {
 
 sub delete_since_height {
     my ($class, $height) = @_;
+    # The stored marker transaction may be deleted with its block
+    QBitcoin::Coinbase->reset_stop_confirmed;
     my $tx_class = 'QBitcoin::Transaction';
     my @coinbase_tx_id;
     # Load and unconfirm transactions from stored blocks to restore UTXO state
