@@ -748,6 +748,26 @@ sub cmd_signrawtransactionwithkey {
             return $self->response_error(sprintf("Input %s:%u already spent.", $txo->tx_in_str, $txo->num), ERR_DESERIALIZATION_ERROR);
         }
         $input_amount += $txo->value;
+        # Freeze / downgrade-output user reclaim (ELSE branch): the signing key is
+        # identified by the reclaim_id (hash256 of its pubkey) in the leading bytes
+        # of the output data, not by the output scripthash (shared by all users).
+        if (my $info = QBT_RECLAIM_SCRIPTS->{$txo->scripthash}) {
+            my ($redeem_script, $len) = @$info;
+            my $reclaim_id = substr($txo->data // "", 0, $len);
+            my ($address) = grep { hash256($_->pubkey) eq $reclaim_id } @address;
+            if ($address) {
+                $tx->make_sign_reclaim($in, $address, $num, $redeem_script);
+            }
+            else {
+                push @errors, {
+                    txid       => unpack("H*", $txo->tx_in),
+                    vout       => $txo->num,
+                    reclaim_id => unpack("H*", $reclaim_id),
+                    error      => "No private key matching reclaim_id",
+                };
+            }
+            next;
+        }
         my ($address, $script);
         foreach my $addr (@address) {
             if ($script = $addr->script_by_hash($txo->scripthash)) {

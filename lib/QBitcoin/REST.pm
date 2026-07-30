@@ -620,6 +620,18 @@ sub wallet_tx_create {
             return $self->http_response(400, sprintf("Input %s:%u already spent", $txo->tx_in_str, $txo->num));
         }
         $input_amount += $txo->value;
+        # Freeze / downgrade-output user reclaim (ELSE branch): the wallet key is
+        # identified by the reclaim_id in the leading bytes of the output data, not
+        # by the output scripthash, which is shared by all users (mirrors
+        # Transaction::Signature::sign_transaction).
+        if (my $info = QBT_RECLAIM_SCRIPTS->{$txo->scripthash}) {
+            my ($redeem_script, $len) = @$info;
+            my $reclaim_id = substr($txo->data // "", 0, $len);
+            my $address = QBitcoin::MyAddress->get_by_pubkeyhash($reclaim_id)
+                or return $self->http_response(400, "Input " . $txo->tx_in_str . ":" . $txo->num . " reclaim_id does not match a known address");
+            $tx->make_sign_reclaim($in, $address, $num, $redeem_script);
+            next;
+        }
         my $address = QBitcoin::MyAddress->get_by_hash($txo->scripthash, 0)
             or return $self->http_response(400, sprintf("Input %s:%u does not belong to a known address", $txo->tx_in_str, $txo->num));
         $address->private_key
