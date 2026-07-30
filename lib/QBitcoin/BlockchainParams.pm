@@ -150,6 +150,16 @@ use constant _DOWNGRADE_IF => OP_6 . OP_TX_TYPE . OP_EQUALVERIFY . OP_1;
 use constant QBT_DOWNGRADE_SCRIPT     => _reclaim_script(_DOWNGRADE_IF, DOWNGRADE_OUTPUT_CSV, 32, OP_HASH256);
 use constant QBT_DOWNGRADE_SCRIPTHASH => hash160(QBT_DOWNGRADE_SCRIPT);
 
+# Freeze/downgrade output scripthash -> [redeem_script, reclaim_id length].
+# The user-reclaim (ELSE) branch reads its identity (hash160/hash256 of the user
+# pubkey) from the leading bytes of the output data.
+sub QBT_RECLAIM_SCRIPTS()   {
+    state $reclaim_scripts = {
+        QBT_FREEZE_SCRIPTHASH()    => [ QBT_FREEZE_SCRIPT,    32 ],
+        QBT_DOWNGRADE_SCRIPTHASH() => [ QBT_DOWNGRADE_SCRIPT, 32 ],
+    };
+}
+
 use Exporter 'import';
 our @EXPORT = (
     keys %{&MAINNET},
@@ -161,6 +171,7 @@ our @EXPORT = (
     'QBT_FREEZE_SCRIPTHASH',
     'QBT_DOWNGRADE_SCRIPT',
     'QBT_DOWNGRADE_SCRIPTHASH',
+    'QBT_RECLAIM_SCRIPTS',
 );
 
 1;
