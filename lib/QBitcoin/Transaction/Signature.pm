@@ -14,18 +14,6 @@ use QBitcoin::Crypto qw(signature hash160);
 use QBitcoin::RedeemScript;
 use Role::Tiny;
 
-# Freeze/downgrade output scripthash -> [redeem_script, reclaim_id length].
-# The user-reclaim (ELSE) branch reads its identity (hash160/hash256 of the user
-# pubkey) from the leading bytes of the output data. Computed lazily.
-my %RECLAIM_SCRIPTS;
-sub _reclaim_scripts {
-    %RECLAIM_SCRIPTS = (
-        QBT_FREEZE_SCRIPTHASH()    => [ QBT_FREEZE_SCRIPT,    32 ],
-        QBT_DOWNGRADE_SCRIPTHASH() => [ QBT_DOWNGRADE_SCRIPT, 32 ],
-    ) unless %RECLAIM_SCRIPTS;
-    return \%RECLAIM_SCRIPTS;
-}
-
 sub _sign_alg {
     my ($address) = @_;
     my @pk_alg = $address->algo;
@@ -57,7 +45,7 @@ sub sign_transaction {
         }
 
         # Freeze / downgrade-output user reclaim (ELSE branch).
-        if (my $info = _reclaim_scripts()->{$scripthash}) {
+        if (my $info = QBT_RECLAIM_SCRIPTS->{$scripthash}) {
             my ($redeem, $len) = @$info;
             my $reclaim_id = substr($in->{txo}->data // "", 0, $len);
             if (my $address = QBitcoin::MyAddress->get_by_pubkeyhash($reclaim_id)) {
