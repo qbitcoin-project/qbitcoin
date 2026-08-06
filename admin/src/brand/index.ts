@@ -16,15 +16,13 @@ export interface BrandConfig {
     };
 }
 
-// Generic base58 address regex as a stub.
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{20,80}$/;
-
 export const brand: BrandConfig = {
-    assetLabel: { main: 'COIN', testnet: 'tCOIN' },
-    assetName: 'Blockchain',
-    addressMainnetRe: BASE58_RE,
-    addressTestnetRe: BASE58_RE,
-    logoSize: { width: 127, height: 50 },
+    assetLabel: { main: 'QBTC', testnet: 'tQBTC' },
+    assetName: 'QBitcoin',
+    addressMainnetRe: /^(?:bq[1-9A-HJ-NP-Za-km-z]{33}|3u[H-K][1-9A-HJ-NP-Za-km-z]{49})$/,
+    addressTestnetRe: /^(?:btq[1-9A-HJ-NP-Za-km-z]{33}|3ua[234][1-9A-HJ-NP-Za-km-z]{49})$/,
+    logoSize: { width: 48, height: 48 },
+    accent: { light: '#c2560d', dark: '#fd7007' },
 };
 
 export { Logo };
