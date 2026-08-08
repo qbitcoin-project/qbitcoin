@@ -42,6 +42,14 @@ use constant MAINNET => {
     UPGRADE_FINISHED   => 0,
     UPGRADE_STOP_UTXO  => _stop_utxo_set(
         # "txid:vout"
+        "6c3efe515b5017c5020e1f20a2c5924fa09e6648cf3eb3858771d2cad7edec45:0", # 0.1 BTC to PK "\x02"x33
+        "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098:0", # Coinbase P2PK 50 BTC, block 1
+        "9b0fc92260312ce44e74ef369f5c66bbb85848f2eddd5a7a1cde251e54ccfdd5:0", # Coinbase P2PK 50 BTC, block 2
+        "999e1c837c76a1b7fbb7e57baf87b309960f5ffefbf2a9b95dd890602272f644:0", # Coinbase P2PK 50 BTC, block 3
+        "44794602bebb5d51996e3c9b6ba9bd72f62bc9308b4eeaf52ca670b0fb9598b4:0", # 1 BTC to P2PKH 1F96aqP38aRb8aVexSUGAh2kiCyjrgoqBh
+        "277951bc92bc86ed75ae4baa2ac5e7d1f3ecd2c951819796ad7d04cda431f430:0", #  800 BTC to P2PK block  3307, Feb 2009
+        # "6bf2fb101058394e3aa7f79c188cd1967ccf76ac1cebc33c3c7fc510272f98aa:0", # 3233 BTC to P2PK block 40758, Feb 2010
+        # "42bd3ac3e78bdaf69c4c020a695cec9fcfc3f9777be531f2fa0aeb23d884db4c:1", #  875 BTC to P2PK block 62373, Jun 2010
     ),
     CHECKPOINTS        => {
         # height => pack('H*', "block_hash_hex"),
