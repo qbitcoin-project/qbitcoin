@@ -83,7 +83,11 @@ is($utxo && $utxo->{data}, TXO_DATA_TAG . $tag, "raw data preserved for stored t
 ok($utxo && !exists $utxo->{tag}, "no display tag in get_address_utxo result");
 
 # Wallet startup load must not poison the TXO cache: the stored transaction must
-# still load from the database with a matching hash afterwards
+# still load from the database with a matching hash afterwards.
+# load_address_utxo takes the registry roles from TXO::My->my_roles; mock it
+# since the FakeAddress below is not registered in the wallet
+my $txo_module = Test::MockModule->new('QBitcoin::TXO');
+$txo_module->mock('my_roles', sub { QBitcoin::Wallet::UTXO::UTXO_MY });
 my $generate_module = Test::MockModule->new('QBitcoin::Generate');
 $generate_module->mock('load_reclaim_utxo', sub {});
 my $my_address = FakeAddress->new(
