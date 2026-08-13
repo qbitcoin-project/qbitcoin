@@ -1875,6 +1875,9 @@ sub confirm {
     $self->block_height = $block->height;
     $self->block_pos = $pos;
     $self->block_time = $block->time;
+    # The genesis stake transaction defines the genesis-reward scripthashes; make
+    # them known before its outputs get their wallet-utxo roles assigned below
+    QBitcoin::Coins->set_genesis_tx($self) if $block->height == 0 && $pos == 0;
     if (my $coinbase = $self->up) {
         $coinbase->tx_out = $self->hash;
         $coinbase->upgrade_level = $self->upgrade_level;

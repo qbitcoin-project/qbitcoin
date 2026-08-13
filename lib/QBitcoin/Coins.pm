@@ -92,6 +92,28 @@ sub genesis_scripthashes {
     return $GENESIS_SCRIPTHASHES = \%scripthash;
 }
 
+# Prime the genesis-scripthash cache directly from the genesis stake transaction,
+# called when it is confirmed. At that moment the genesis block is not yet
+# installed in the best branch (Block::Receive sets best_block after validate_chain
+# confirms the transactions), so the genesis_scripthashes lookup above cannot see
+# it - and its outputs are entering the wallet-utxo registry right now, so their
+# stake-only roles must already be decidable.
+sub set_genesis_tx {
+    my ($class, $tx) = @_;
+    return if defined $GENESIS_SCRIPTHASHES;
+    my $genesis_reward = $config->{regtest} ? $config->{genesis_reward} // 0 : GENESIS_REWARD;
+    if (!$genesis_reward) {
+        $GENESIS_SCRIPTHASHES = {};
+        return;
+    }
+    $tx->is_stake && !@{$tx->in}
+        or return;
+    my %scripthash;
+    $scripthash{$_->scripthash} = 1 foreach grep { $_->value > 0 } @{$tx->out};
+    $GENESIS_SCRIPTHASHES = \%scripthash if %scripthash;
+    return;
+}
+
 sub add_coinbase { my (undef, $value) = @_; $UPGRADE_TOTAL += $value if $INITIALIZED }
 sub del_coinbase { my (undef, $value) = @_; $UPGRADE_TOTAL -= $value if $INITIALIZED }
 sub add_static   { my (undef, $value) = @_; $STATIC_TOTAL  += $value if $INITIALIZED }
