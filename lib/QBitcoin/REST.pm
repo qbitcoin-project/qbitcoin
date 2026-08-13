@@ -877,6 +877,22 @@ sub tx_obj {
                 value        => $tx->up->value,
             },
         ) : (),
+        $tx->is_downgrade && $tx->down ? (
+            downgrade_info => {
+                freeze_txid      => unpack("H*", $tx->down->freeze_txid),
+                freeze_vout      => $tx->down->freeze_vout + 0,
+                btc_txid         => unpack("H*", scalar reverse $tx->down->btc_txid),
+                btc_vout         => $tx->down->btc_vout + 0,
+                btc_value        => $tx->down->btc_value + 0,
+                btc_scriptpubkey => unpack("H*", $tx->down->scriptpubkey),
+            },
+        ) : (),
+        $tx->is_burn && $tx->down ? (
+            downgrade_info => {
+                btc_block_hash => unpack("H*", scalar reverse $tx->down->btc_block_hash),
+                btc_txid       => unpack("H*", scalar reverse hash256($tx->down->btc_tx_data)),
+            },
+        ) : (),
         $tx->is_tokens ? ( token_id => unpack("H*", $tx->token_hash // "") ) : (),
     };
 }

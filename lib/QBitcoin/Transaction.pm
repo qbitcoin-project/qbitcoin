@@ -699,16 +699,20 @@ sub as_hashref {
     $res->{time} = $self->received_time if defined $self->received_time;
     $res->{token_id} = unpack("H*", $self->token_hash // "") if $self->is_tokens;
     if ($self->is_downgrade && $self->down) {
-        $res->{freeze_txid}   = unpack("H*", $self->down->freeze_txid);
-        $res->{freeze_vout}   = $self->down->freeze_vout + 0;
-        $res->{btc_txid}      = unpack("H*", scalar reverse $self->down->btc_txid);
-        $res->{btc_vout}      = $self->down->btc_vout + 0;
-        $res->{btc_value}     = $self->down->btc_value + 0;
-        $res->{btc_scriptpubkey} = unpack("H*", $self->down->scriptpubkey);
+        $res->{downgrade_info} = {
+            freeze_txid      => unpack("H*", $self->down->freeze_txid),
+            freeze_vout      => $self->down->freeze_vout + 0,
+            btc_txid         => unpack("H*", scalar reverse $self->down->btc_txid),
+            btc_vout         => $self->down->btc_vout + 0,
+            btc_value        => $self->down->btc_value / DENOMINATOR,
+            btc_scriptpubkey => unpack("H*", $self->down->scriptpubkey),
+        };
     }
     elsif ($self->is_burn && $self->down) {
-        $res->{btc_block_hash} = unpack("H*", scalar reverse $self->down->btc_block_hash);
-        $res->{btc_txid}       = unpack("H*", scalar reverse hash256($self->down->btc_tx_data));
+        $res->{downgrade_info} = {
+            btc_block_hash => unpack("H*", scalar reverse $self->down->btc_block_hash),
+            btc_txid       => unpack("H*", scalar reverse hash256($self->down->btc_tx_data)),
+        };
     }
     return $res;
 }
