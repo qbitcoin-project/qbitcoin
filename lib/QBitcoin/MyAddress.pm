@@ -10,7 +10,7 @@ use QBitcoin::ORM qw(find update delete :types);
 use QBitcoin::Crypto qw(hash160 hash256 pk_import pk_alg);
 use QBitcoin::Address qw(wif_to_pk wif_delegation_hash address_by_pubkey address_by_hash script_by_pubkey script_by_pubkeyhash addresses_by_pubkey scripthash_by_address pubkeyhash_by_pubkey);
 use QBitcoin::Script::Delegation qw(delegation_script delegation_scripthash);
-use QBitcoin::Wallet::UTXO qw(myutxo_add myutxo_del myutxo_list);
+use QBitcoin::Wallet::UTXO qw(myutxo_add myutxo_del myutxo_all);
 use QBitcoin::Tag;
 use QBitcoin::Wallet::Crypt qw(is_encrypted_pk decrypt_pk unlocked);
 
@@ -73,11 +73,13 @@ sub stake_address {
     return wantarray ? @$STAKE_ADDRESS : $STAKE_ADDRESS->[0];
 }
 
-# Change staked to unstaked or unstaked to staked for the given address
+# Change staked to unstaked or unstaked to staked for the given address.
+# Iterate the whole registry: stake-only (genesis-reward) outputs are not part
+# of myutxo_all but their stake role depends on the staked flag too.
 sub update_my_utxo {
     my $address = shift;
     my %scripthash = map { $_ => 1 } $address->scripthash;
-    foreach my $utxo (grep { exists $scripthash{$_->scripthash} } myutxo_list()) {
+    foreach my $utxo (grep { exists $scripthash{$_->scripthash} } myutxo_all()) {
         myutxo_del($utxo);
         myutxo_add($utxo, $utxo->my_roles);
     }
@@ -318,7 +320,7 @@ sub remove {
     }
     # Re-add with the remaining roles: the same address may still be delegated
     # to this node for staking
-    foreach my $utxo (myutxo_list()) {
+    foreach my $utxo (myutxo_all()) {
         if ($scripthash{$utxo->scripthash} || $pubkeyhash{substr($utxo->data // "", 0, 32)}) {
             myutxo_del($utxo);
             if (my $roles = $utxo->my_roles) {
