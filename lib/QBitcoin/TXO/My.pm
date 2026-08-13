@@ -67,6 +67,18 @@ sub is_immature_reclaim {
     return defined($mature) && !$mature;
 }
 
+# A genesis-reward output: consensus forbids decreasing the balance of its
+# scripthash (QBitcoin::Transaction::check_genesis_balance), so the wallet may
+# only stake it, never spend it.
+sub is_genesis_reward {
+    my $self = shift;
+    # QBitcoin::Coins is loaded at runtime: it depends on QBitcoin::TXO, so a
+    # compile-time use here would create a dependency loop
+    require QBitcoin::Coins;
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
+    return $genesis->{$self->scripthash // ""} ? 1 : 0;
+}
+
 # Bitmask of QBitcoin::Wallet::UTXO roles for this output; 0 for a foreign one.
 # Reclaim outputs are owned via their reclaim_id (all maturities: the CSV lock is
 # applied at the point of use via is_immature_reclaim).
@@ -75,7 +87,14 @@ sub my_roles {
     my $roles = 0;
     my $my_address = QBitcoin::MyAddress->get_by_hash($self->scripthash, 0) // $self->reclaim_address;
     if ($my_address) {
-        $roles |= $my_address->staked ? QBitcoin::Wallet::UTXO::UTXO_STAKED : QBitcoin::Wallet::UTXO::UTXO_MY;
+        if ($self->is_genesis_reward) {
+            # Stake-only: never in the balance, a stake source once the address stakes
+            $roles |= QBitcoin::Wallet::UTXO::UTXO_STAKEONLY;
+            $roles |= QBitcoin::Wallet::UTXO::UTXO_STAKED if $my_address->staked;
+        }
+        else {
+            $roles |= $my_address->staked ? QBitcoin::Wallet::UTXO::UTXO_STAKED : QBitcoin::Wallet::UTXO::UTXO_MY;
+        }
     }
     if (QBitcoin::Delegation->get_by_hash($self->scripthash)) {
         $roles |= QBitcoin::Wallet::UTXO::UTXO_DELEGATED;
