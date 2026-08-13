@@ -8,11 +8,16 @@ use strict;
 # Stored values are QBitcoin::TXO objects, but only their instance methods are
 # called here, so this module depends on neither TXO nor MyAddress.
 #
-# Roles are a bitmask; an output may be both MY and DELEGATED when the node
-# holds the owner key of an address delegated to it for staking:
+# Roles are a bitmask; an output may combine several roles (e.g. MY and
+# DELEGATED when the node holds the owner key of an address delegated to it
+# for staking):
 # - MY:        spendable by a wallet key, counted in the balance;
-# - STAKED:    an own address used for staking (also counted in the balance);
-# - DELEGATED: delegated to this node for staking; not our money.
+# - STAKED:    used for staking (an own staked address, or the staked genesis
+#              part - see STAKEONLY for whether it is counted in the balance);
+# - DELEGATED: delegated to this node for staking; not our money;
+# - STAKEONLY: a genesis-reward coin: consensus forbids spending it, so it is
+#              never counted in the balance; it provides stake weight (STAKED)
+#              once its address is set for staking.
 
 use QBitcoin::Log;
 
@@ -21,73 +26,80 @@ our @EXPORT_OK = qw(
     myutxo_add
     myutxo_del
     myutxo_list
+    myutxo_all
     myutxo_staked
     myutxo_delegated
     UTXO_MY
     UTXO_STAKED
     UTXO_DELEGATED
+    UTXO_STAKEONLY
 );
 
 use constant {
     UTXO_MY        => 1,
     UTXO_STAKED    => 2,
     UTXO_DELEGATED => 4,
+    UTXO_STAKEONLY => 8,
 };
 
-my %MY_UTXO;
-my %STAKED_UTXO;
-my %DELEGATED_UTXO;
+use constant ROLE_NAMES => {
+    UTXO_MY()        => "my",
+    UTXO_STAKED()    => "staked",
+    UTXO_DELEGATED() => "delegated",
+    UTXO_STAKEONLY() => "stakeonly",
+};
+
+my %UTXO;  # key => [ $txo, $roles ]
+my %ROLES; # key => $roles (kept separately so hot queries avoid array derefs)
+
+sub _roles_str {
+    my ($roles) = @_;
+    return join("+", map { ROLE_NAMES->{$_} } grep { $roles & $_ } sort { $a <=> $b } keys %{ROLE_NAMES()});
+}
 
 sub myutxo_add {
     my ($txo, $roles) = @_;
-    if ($roles & UTXO_MY) {
-        $MY_UTXO{$txo->key} = $txo;
-        Infof("Add my UTXO %s:%u %lu coins", $txo->tx_in_str, $txo->num, $txo->value);
-    }
-    if ($roles & UTXO_STAKED) {
-        $STAKED_UTXO{$txo->key} = $txo;
-        Infof("Add staked UTXO %s:%u %lu coins", $txo->tx_in_str, $txo->num, $txo->value);
-    }
-    if ($roles & UTXO_DELEGATED) {
-        $DELEGATED_UTXO{$txo->key} = $txo;
-        Infof("Add delegated UTXO %s:%u %lu coins", $txo->tx_in_str, $txo->num, $txo->value);
-    }
+    $roles or return;
+    my $key = $txo->key;
+    # Roles from different sources (own address, delegation) merge, matching
+    # del+add recomputation by my_roles
+    $roles |= $ROLES{$key} // 0;
+    $UTXO{$key} = $txo;
+    $ROLES{$key} = $roles;
+    Infof("Add %s UTXO %s:%u %lu coins", _roles_str($roles), $txo->tx_in_str, $txo->num, $txo->value);
 }
 
 sub myutxo_del {
     my ($txo) = @_;
-    if (delete $MY_UTXO{$txo->key}) {
-        Infof("Delete my UTXO %s:%u %lu coins", $txo->tx_in_str, $txo->num, $txo->value);
-    }
-    if (delete $STAKED_UTXO{$txo->key}) {
-        Infof("Delete staked UTXO %s:%u %lu coins", $txo->tx_in_str, $txo->num, $txo->value);
-    }
-    if (delete $DELEGATED_UTXO{$txo->key}) {
-        Infof("Delete delegated UTXO %s:%u %lu coins", $txo->tx_in_str, $txo->num, $txo->value);
+    my $key = $txo->key;
+    if (defined(my $roles = delete $ROLES{$key})) {
+        delete $UTXO{$key};
+        Infof("Delete %s UTXO %s:%u %lu coins", _roles_str($roles), $txo->tx_in_str, $txo->num, $txo->value);
     }
 }
 
-# NB: these return a named array, not the bare "values(%a), values(%b)" list. Callers use
-# them in boolean and numeric context too ("do we have anything to stake with?"), and a list
-# in scalar context is the comma operator: it yields only its LAST element, i.e. the size of
-# the second hash alone. A node staking its own coins with no delegations then looked like it
-# had no stake sources at all.
-#
-# Own coins: the wallet balance and spendable-output selection
+# Own coins: the wallet balance and spendable-output selection.
+# Stake-only (genesis-reward) coins are excluded even when staked: consensus
+# forbids spending them, so they are never part of the balance.
 sub myutxo_list {
-    my @utxo = (values(%MY_UTXO), values(%STAKED_UTXO));
-    return @utxo;
+    return map { $UTXO{$_} }
+        grep { $ROLES{$_} & (UTXO_MY | UTXO_STAKED) && !($ROLES{$_} & UTXO_STAKEONLY) } keys %ROLES;
 }
 
-# Stake sources: own staked coins plus coins delegated to this node.
-# An output present in both MY and DELEGATED is returned once (as delegated).
+# Stake sources: own staked coins (including the staked genesis part) plus
+# coins delegated to this node
 sub myutxo_staked {
-    my @utxo = (values(%STAKED_UTXO), values(%DELEGATED_UTXO));
-    return @utxo;
+    return map { $UTXO{$_} } grep { $ROLES{$_} & (UTXO_STAKED | UTXO_DELEGATED) } keys %ROLES;
 }
 
 sub myutxo_delegated {
-    return values %DELEGATED_UTXO;
+    return map { $UTXO{$_} } grep { $ROLES{$_} & UTXO_DELEGATED } keys %ROLES;
+}
+
+# Every tracked output regardless of roles, for re-rolling on wallet changes
+# (stake flag toggle, address removal)
+sub myutxo_all {
+    return values %UTXO;
 }
 
 1;

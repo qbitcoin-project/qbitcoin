@@ -2156,7 +2156,7 @@ Result:
     "watchonly" : true|false   (boolean) whether the address is watch-only (no private key)
     "tag" : "str"|null         (string or null) notification tag for this address
     "delegation" : "str",      (string, optional) delegated-staking role of this wallet: "owner", "delegate" or "both"
-    "stakeonly" : true         (boolean, optional) only the staking key is here: the address is staked for a foreign owner and is not counted in getbalance
+    "stakeonly" : true         (boolean, optional) the address can only stake, it is not counted in getbalance: staked for a foreign owner, or holds the unspendable genesis reward
   },
   ...
 }
@@ -2169,6 +2169,7 @@ Examples:
 sub cmd_listmyaddresses {
     my $self = shift;
     my $include_watchonly = $self->args->[0] // TRUE;
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
     my %list;
     foreach my $my_address (QBitcoin::MyAddress->watched_address) {
         next if $my_address->is_watchonly && !$include_watchonly;
@@ -2184,6 +2185,11 @@ sub cmd_listmyaddresses {
             $delegation ? (delegation => $delegation) : (),
         };
         $list{$my_address->address}{staked} = TRUE if $delegation && $delegation eq "both";
+        # Genesis-reward addresses are stake-only by consensus, like foreign-owned
+        # delegations below: they may stake but are not counted in getbalance
+        if (grep { $genesis->{$_} } $my_address->scripthash) {
+            $list{$my_address->address}{stakeonly} = TRUE;
+        }
     }
     # Addresses delegated to this node whose owner key is elsewhere: staked
     # here, but not our money (not counted in getbalance)
@@ -2224,7 +2230,7 @@ Result:
   "pubkey" : "hex",             (string, optional) The hex value of the raw public key (if known)
   "pubkeyhash" : "str",         (string, optional) base58 hash of the public key (wallet addresses with a private key)
   "delegation" : "str",         (string, optional) delegated-staking role of this wallet: "owner", "delegate" or "both"
-  "stakeonly" : true,           (boolean, optional) only the staking key is here: staked for a foreign owner, not counted in getbalance
+  "stakeonly" : true,           (boolean, optional) the address can only stake, not counted in getbalance: staked for a foreign owner, or holds the unspendable genesis reward
   "delegate_pubkeyhash" : "str",(string, optional) the delegate staking pubkeyhash (delegation owner side)
   "owner_pubkeyhash" : "str",   (string, optional) the owner pubkeyhash (delegation delegate side)
   "staking_pubkeyhash" : "str"  (string, optional) the staking key used for this address (delegation delegate side)
@@ -2269,6 +2275,10 @@ sub cmd_getaddressinfo {
         $res->{owner_pubkeyhash}   = pubkeyhash_str($delegation->owner_pubkeyhash);
         $res->{staking_pubkeyhash} = $delegation->staking_key->pubkeyhash_string;
     }
+    # Genesis-reward addresses are stake-only by consensus: they may stake but
+    # cannot be spent and are not counted in getbalance
+    my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
+    $res->{stakeonly} = TRUE if $genesis->{$scripthash};
     return $self->response_ok($res);
 }
 
