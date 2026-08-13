@@ -340,16 +340,20 @@ sub process_request {
         shift @path; # remove "wallet"
         return $self->http_response(404, "Unknown request") unless @path;
         if ($path[0] eq "my_addresses") {
+            my $genesis = QBitcoin::Coins->genesis_scripthashes // {};
             return $self->http_ok([
                 map {
-                    my $delegated = $_->is_delegation
-                        ? (QBitcoin::Delegation->get_by_hash(scalar $_->scripthash) ? "both" : "owner")
+                    my $addr = $_;
+                    my $delegated = $addr->is_delegation
+                        ? (QBitcoin::Delegation->get_by_hash(scalar $addr->scripthash) ? "both" : "owner")
                         : undef;
                     +{
-                        address => $_->address,
-                        staked  => ($_->staked || ($delegated && $delegated eq "both")) ? TRUE : FALSE,
-                        algo    => [ map { CRYPT_ALGO_NAMES->{$_} } $_->algo ],
+                        address => $addr->address,
+                        staked  => ($addr->staked || ($delegated && $delegated eq "both")) ? TRUE : FALSE,
+                        algo    => [ map { CRYPT_ALGO_NAMES->{$_} } $addr->algo ],
                         $delegated ? (delegation => $delegated) : (),
+                        # Genesis-reward addresses are stake-only by consensus: not counted in the balance
+                        grep({ $genesis->{$_} } $addr->scripthash) ? (stakeonly => TRUE) : (),
                         # last_used => ... # TODO
                     }
                 } QBitcoin::MyAddress->my_address()
