@@ -43,17 +43,14 @@ sub load_utxo {
 }
 
 # Accepts a QBitcoin::MyAddress or a QBitcoin::Delegation (both provide
-# address and scripthash); which utxo registry buckets the outputs go to is
-# decided by the object we load for, so the caller stays the single authority
-# on wallet membership
+# address and scripthash); the utxo registry roles come from TXO::My->my_roles,
+# the same authority used when outputs enter the registry on confirm - it knows
+# about own/staked addresses, delegations and stake-only genesis-reward coins
 sub load_address_utxo {
     my $class = shift;
     my ($my_address) = @_;
     my $count = 0;
     my $value = 0;
-    my $roles = $my_address->isa('QBitcoin::Delegation') ? QBitcoin::Wallet::UTXO::UTXO_DELEGATED
-        : $my_address->can('staked') && $my_address->staked ? QBitcoin::Wallet::UTXO::UTXO_STAKED
-        : QBitcoin::Wallet::UTXO::UTXO_MY;
     my $scripthash = $my_address->scripthash;
     my $chain_utxo = get_address_utxo($my_address->address, 1000);
     foreach my $txid (keys %$chain_utxo) {
@@ -67,7 +64,7 @@ sub load_address_utxo {
                 data       => $utxo_data->{data} // "",
                 defined($utxo_data->{token_id}) ? ( token_hash => $utxo_data->{token_id} ) : (),
             });
-            QBitcoin::Wallet::UTXO::myutxo_add($utxo, $roles);
+            QBitcoin::Wallet::UTXO::myutxo_add($utxo, $utxo->my_roles);
             $count++;
             $value += $utxo->value;
         }
