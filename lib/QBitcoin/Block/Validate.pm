@@ -156,11 +156,12 @@ sub validate {
             if ($was_slashing && !$config->{regtest}) {
                 return "Burn transaction " . $transaction->hash_str . " must not be after slashing transaction $was_slashing";
             }
-            # Burn finalizes a downgrade: the freeze value (fee) is destroyed and the
+            # Burn finalizes a downgrade: the freeze value is destroyed and the
             # corresponding BTC is released from the peg. upgraded uses the full
             # (fee-free) downgrade_value; the service fee only reduces what the user
             # actually receives, checked separately against the SPV output value.
-            my $btc_value = downgrade_value($transaction->fee, $upgraded);
+            my $value = sum0 map { $_->{txo}->value } @{$transaction->in};
+            my $btc_value = downgrade_value($value, $upgraded);
             $upgraded   -= $btc_value;
             $downgraded += $btc_value;
             $was_burn = $transaction->hash_str;
