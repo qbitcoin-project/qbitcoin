@@ -26,14 +26,17 @@ use QBitcoin::Downgrade;
 use QBitcoin::TXO;
 use QBitcoin::Transaction;
 
-# build_downgrade_tx($freeze_txo, system_addresses => [$addr1, $addr2], btc_txid => ..., btc_vout => ..., btc_value => ...)
-# Returns the signed (unbroadcast) downgrade transaction, or undef on error.
-sub build_downgrade_tx {
+# build_downgrade_unsigned($freeze_txo, btc_txid => ..., btc_vout => ..., btc_value => ...)
+# The unsigned downgrade transaction (no siglist, no hash). The construction is
+# deterministic - a pure function of the freeze output and the commitment - so
+# the federation members build the identical object independently and exchange
+# signatures over it. Returns undef on error.
+sub build_downgrade_unsigned {
     my $class = shift;
     my ($freeze_txo, %args) = @_;
 
     my $sh = $freeze_txo->scripthash // "";
-    my ($reclaim_len, $freeze_script, $out_scripthash) = (32, QBT_FREEZE_SCRIPT, QBT_DOWNGRADE_SCRIPTHASH);
+    my ($reclaim_len, $out_scripthash) = (32, QBT_DOWNGRADE_SCRIPTHASH);
     unless ($sh eq QBT_FREEZE_SCRIPTHASH) {
         Errf("build_downgrade_tx: input is not a freeze output");
         return undef;
@@ -41,11 +44,6 @@ sub build_downgrade_tx {
     my $data = $freeze_txo->data // "";
     if (length($data) < $reclaim_len) {
         Errf("build_downgrade_tx: freeze data too short");
-        return undef;
-    }
-    my $signers = $args{system_addresses};
-    unless (ref($signers) eq 'ARRAY' && @$signers) {
-        Errf("build_downgrade_tx: system_addresses arrayref is required");
         return undef;
     }
     my $reclaim_id   = substr($data, 0, $reclaim_len);
@@ -64,7 +62,7 @@ sub build_downgrade_tx {
         scripthash => $out_scripthash,
         data       => $reclaim_id,
     });
-    my $tx = QBitcoin::Transaction->new(
+    return QBitcoin::Transaction->new(
         in            => [ { txo => $freeze_txo } ],
         out           => [ $out ],
         fee           => 0,
@@ -72,7 +70,22 @@ sub build_downgrade_tx {
         down          => $commit,
         received_time => time(),
     );
-    $tx->make_sign_freeze_if($tx->in->[0], $signers, 0, $freeze_script);
+}
+
+# build_downgrade_tx($freeze_txo, system_addresses => [$addr1, $addr2], btc_txid => ..., btc_vout => ..., btc_value => ...)
+# Returns the signed (unbroadcast) downgrade transaction, or undef on error.
+sub build_downgrade_tx {
+    my $class = shift;
+    my ($freeze_txo, %args) = @_;
+
+    my $signers = $args{system_addresses};
+    unless (ref($signers) eq 'ARRAY' && @$signers) {
+        Errf("build_downgrade_tx: system_addresses arrayref is required");
+        return undef;
+    }
+    my $tx = $class->build_downgrade_unsigned($freeze_txo, %args)
+        or return undef;
+    $tx->make_sign_freeze_if($tx->in->[0], $signers, 0, QBT_FREEZE_SCRIPT);
     $tx->calculate_hash;
     return $tx;
 }
