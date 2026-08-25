@@ -19,7 +19,17 @@ sub _stop_utxo_set {
 use constant MAINNET => {
     GENESIS_HASH       => pack("H*", ""),
     QBT_LOCK_PUBKEY    => pack("H*", "03c3fe5cc51c8c1d6b04ec0fe00d3487863c0eec33ac6360095700868d66de19ff"),
-    QBT_LOCK_ADDR      => "1QBTC1vwR9mao3AUPAmRgkz7wmUnZxCkv2",
+    # BTC pubkeys of the three federation operators behind the deposit/pool address
+    # (2-of-3, see QBT_LOCK_WITNESS_SCRIPT / QBT_LOCK_SCRIPT below); any order here,
+    # the witnessScript sorts them (BIP67).
+    # PLACEHOLDER, address 3QZoPmLvhUZdmSgYqPtaXiGhZbYNP9EWhH: publicly derivable keys
+    # sha256("QBTC:MAINNET:LOCK:PLACEHOLDER:{A,B,C}"); MUST be replaced with the real
+    # operators' keys (one ground for the 3QBTC... vanity prefix) before launch.
+    QBT_LOCK_PUBKEYS   => [
+        pack("H*", "038cfedef8e54db075343268c0e78cd2f43ff607f1ddf12bd89339cbd49d7d67ea"),
+        pack("H*", "038c3261f1f3dc222639105fccff6c2dcbd443d4708ef3210c590908371b0c868e"),
+        pack("H*", "035b6bde0b82ac598c52d6f2dc0975c0b8d04b3e3df2403f4e2f3331547aa00c16"),
+    ],
     ADDRESS_VER        => "\x80",
     DELEG_KEY_VER256   => "\x8d", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
     DELEG_KEY_VER160   => "\x8e", # delegation WIF: privkey + hash160(delegate pubkey), pre-quantum delegate key
@@ -58,7 +68,14 @@ use constant MAINNET => {
 use constant TESTNET => {
     GENESIS_HASH       => pack("H*", "9a23986048cffb3b5115365cd94fe58441703653e561e0ff89f00c68a424b342"),
     QBT_LOCK_PUBKEY    => pack("H*", "02943a59688f1eceb1d068f6ac0ff84c8f17b2c3714269aec2185422cd61b748b6"),
-    QBT_LOCK_ADDR      => "mqbtcT4awjiAjrxMyGNnbdusCdCpMkryxv",
+    # PLACEHOLDER, address 2NBqgqi19eaHgtRpVeUPecY1UeQGytUoRVQ: publicly derivable keys
+    # sha256("QBTC:TESTNET:LOCK:PLACEHOLDER:{A,B,C}"); replace with the testnet
+    # operators' keys before the next split.
+    QBT_LOCK_PUBKEYS   => [
+        pack("H*", "023b110b5bf56ab9e0be8725f96df493b8cd07dca1d816eb336f0358ad299731b5"),
+        pack("H*", "027dd3829de404f13bd5c8b9def6c936f728429519916d4c152a22cd20f31e2512"),
+        pack("H*", "02ad9e9c19d189e6656a2a583028f757745e607b2d3755db1680dcaa131b533426"),
+    ],
     ADDRESS_VER        => "\xef",
     DELEG_KEY_VER256   => "\xf0", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
     DELEG_KEY_VER160   => "\xf1", # delegation WIF: privkey + hash160(delegate pubkey), pre-quantum delegate key
@@ -84,6 +101,14 @@ use constant TESTNET => {
 };
 use constant REGTEST => {
     GENESIS_HASH       => pack("H*", ""),
+    # Regtest 2-of-3 lock keys, address 2N43iTdZBtFPzs5PvKkkbw8noqiDMGWrmLQ.
+    # Dev keys, intentionally derivable as sha256("QBTC:REGTEST:LOCK:{A,B,C}") so tests
+    # can sign pool spends without storing secrets.
+    QBT_LOCK_PUBKEYS   => [
+        pack("H*", "0257b3c47b272acf97881d3c1f65c122dcbd1098c218dd7a9d612fce02b87c9599"),
+        pack("H*", "02a9e30e791334d7cc4ababd3cb6e5795668f654d434e941aa96ee23442643ad07"),
+        pack("H*", "03cd91e21e72efff1cbaf0c70837a791c163e7b508f775de47bd7a6bacef3a6c1f"),
+    ],
     PORT               => 29555,
     RPC_PORT           => 29556,
     REST_PORT          => 29557,
@@ -117,7 +142,8 @@ use constant COMMON_CONST => {
 
 use QBitcoin::Script::OpCodes qw(:OPCODES);
 use QBitcoin::Config;
-use QBitcoin::Crypto qw(hash160);
+use QBitcoin::Crypto qw(hash160 sha256 checksum32);
+use Encode::Base58::GMP qw(encode_base58);
 
 use constant COMMON_CONST;
 
@@ -133,8 +159,39 @@ BEGIN {
 
 sub QBT_BURN_SCRIPT() { state $qbt_burn_script = pack("C", length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
 sub QBT_BURN_LEN()    { state $qbt_burn_len = length(QBT_BURN_SCRIPT) }
+
+# The BTC-side system address: btc->qbt upgrade deposits are recognized by an
+# output paying QBT_LOCK_SCRIPT, and the same address holds the frozen BTC pool
+# the downgrade service pays releases from. It is a P2SH-wrapped P2WSH 2-of-3
+# multisig of the federation operators (QBT_LOCK_PUBKEYS):
+#   witnessScript = OP_2 <pk1> <pk2> <pk3> OP_3 OP_CHECKMULTISIG, BIP67 key order
+#   redeemScript  = OP_0 <32: sha256(witnessScript)>       (P2WSH witness program)
+#   scriptPubKey  = OP_HASH160 <20: hash160(redeemScript)> OP_EQUAL
+# BIP141 requires the scriptSig of every spend of such an output to be exactly a
+# single push of the redeemScript, so QBT_LOCK_SCRIPTSIG is a deterministic
+# 35-byte constant located in the non-witness (txid-committed, SPV-provable) part
+# of the spending transaction: it identifies pool spends (releases, fee bumps,
+# transfers co-spending a pool input), which must not be counted as upgrade
+# deposits even though they pay change back to QBT_LOCK_SCRIPT.
+sub QBT_LOCK_WITNESS_SCRIPT() {
+    state $qbt_lock_witness_script = do {
+        my @pubkeys = @{&QBT_LOCK_PUBKEYS};
+        @pubkeys == 3 && !grep(length($_) != 33, @pubkeys)
+            or die "QBT_LOCK_PUBKEYS must be three 33-byte compressed pubkeys";
+        OP_2 . join("", map { pack("C", 33) . $_ } sort @pubkeys) . OP_3 . OP_CHECKMULTISIG;
+    };
+}
+sub QBT_LOCK_REDEEM_SCRIPT() { state $qbt_lock_redeem = "\x00\x20" . sha256(QBT_LOCK_WITNESS_SCRIPT) }
+sub QBT_LOCK_SCRIPTSIG()     { state $qbt_lock_scriptsig = "\x22" . QBT_LOCK_REDEEM_SCRIPT }
 sub QBT_LOCK_SCRIPT() {
-    state $qbt_lock_script = OP_DUP . OP_HASH160 . pack("C", 20) . hash160(QBT_LOCK_PUBKEY) . OP_EQUALVERIFY . OP_CHECKSIG;
+    state $qbt_lock_script = OP_HASH160 . pack("C", 20) . hash160(QBT_LOCK_REDEEM_SCRIPT) . OP_EQUAL;
+}
+# Base58Check P2SH address of the lock script - the published deposit address.
+sub QBT_LOCK_ADDR() {
+    state $qbt_lock_addr = do {
+        my $payload = pack("C", BTC_P2SH_VER) . hash160(QBT_LOCK_REDEEM_SCRIPT);
+        "" . encode_base58("0x" . unpack("H*", $payload . checksum32($payload)), "bitcoin");
+    };
 }
 
 # Build a "system-spend-or-user-reclaim" script used by both the freeze output and
@@ -193,7 +250,11 @@ our @EXPORT = (
     keys %{&COMMON_CONST},
     'QBT_BURN_SCRIPT',
     'QBT_BURN_LEN',
+    'QBT_LOCK_WITNESS_SCRIPT',
+    'QBT_LOCK_REDEEM_SCRIPT',
+    'QBT_LOCK_SCRIPTSIG',
     'QBT_LOCK_SCRIPT',
+    'QBT_LOCK_ADDR',
     'QBT_FREEZE_SCRIPT',
     'QBT_FREEZE_SCRIPTHASH',
     'QBT_DOWNGRADE_SCRIPT',
