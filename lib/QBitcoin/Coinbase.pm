@@ -16,6 +16,7 @@ use QBitcoin::ProtocolState qw(btc_synced);
 use QBitcoin::Script::OpCodes qw(:OPCODES);
 use QBitcoin::RedeemScript;
 use QBitcoin::ValueUpgraded qw(upgrade_value);
+use QBitcoin::Downgrade;
 use Bitcoin::Serialized;
 use Bitcoin::Transaction;
 use Bitcoin::Block;
@@ -331,6 +332,20 @@ sub get_scripthash {
     my $out = $tx->out->[$out_num];
     $out->{open_script} eq QBT_LOCK_SCRIPT
         or return undef;
+    # A pool spend pays change back to QBT_LOCK_SCRIPT; that change is already pegged
+    # value, not a fresh deposit, and minting for it would double-count the peg. Two
+    # stateless signs in the non-witness (txid-committed, SPV-provable) transaction
+    # data identify such transactions: an input spending the pool itself (BIP141
+    # forces its scriptSig to be exactly QBT_LOCK_SCRIPTSIG), or a strict-format
+    # downgrade marker among the outputs (every release carries one). A marker also
+    # excludes the transaction paying the deposit script: crafting one next to an own
+    # deposit only donates that deposit to the pool.
+    if ((grep { ($_->{script} // "") eq QBT_LOCK_SCRIPTSIG } @{$tx->in})
+        || QBitcoin::Downgrade->tx_has_downgrade_marker($tx))
+    {
+        Infof("Skip pool-spend btc tx %s output %u: pool change, not an upgrade", $tx->hash_str, $out_num);
+        return undef;
+    }
     if (@{$tx->out} > $out_num+1 && substr(my $out_script = $tx->out->[$out_num+1]->{open_script}, 0, 1) eq OP_RETURN) {
         my $len = unpack("C", substr($out_script, 1, 1));
         if (!$len || $len < 20 || $len > 75 || length($out_script) != $len + 2) {

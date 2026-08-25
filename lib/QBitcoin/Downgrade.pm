@@ -37,6 +37,7 @@ mk_accessors(qw(freeze_txid freeze_vout btc_txid btc_vout btc_value scriptpubkey
 
 use constant DOWNGRADE_MARKER_MAGIC   => "QDG1";
 use constant DOWNGRADE_MARKER_VERSION => 1;
+use constant DOWNGRADE_MARKER_LEN     => length(DOWNGRADE_MARKER_MAGIC) + 1 + 32 + 4; # magic, version, freeze txid, vout
 
 sub downgrade_marker {
     my $class = shift;
@@ -190,14 +191,32 @@ sub validate_spv {
 sub _tx_has_marker {
     my ($btc_tx, $marker) = @_;
     for my $out (@{$btc_tx->out}) {
-        my $script = $out->{open_script} // "";
-        next unless substr($script, 0, 1) eq "\x6a"; # OP_RETURN
-        # Bitcoin Core's createrawtransaction "data" output uses a direct push for
-        # our 41-byte marker. Keep consensus deliberately narrow here: only the
-        # service's canonical marker encoding proves linkage to this freeze.
-        next unless length($script) == length($marker) + 2;
-        next unless substr($script, 1, 1) eq chr(length($marker));
-        return 1 if substr($script, 2) eq $marker;
+        return 1 if (_marker_payload($out) // "") eq $marker;
+    }
+    return 0;
+}
+
+# The strict-format marker payload of an output, or undef if the output is not a
+# downgrade marker. Bitcoin Core's createrawtransaction "data" output uses a direct
+# push for our 41-byte marker. Keep consensus deliberately narrow here: only the
+# service's canonical marker encoding counts.
+sub _marker_payload {
+    my ($out) = @_;
+    my $script = $out->{open_script} // "";
+    return undef unless length($script) == DOWNGRADE_MARKER_LEN + 2;
+    return undef unless substr($script, 0, 2) eq "\x6a" . chr(DOWNGRADE_MARKER_LEN); # OP_RETURN, direct push
+    return undef unless substr($script, 2, 5) eq DOWNGRADE_MARKER_MAGIC . chr(DOWNGRADE_MARKER_VERSION);
+    return substr($script, 2);
+}
+
+# True if any output carries a strict-format downgrade marker, whichever freeze it
+# references. Every release (and any other pool spend) carries one, so the upgrade
+# scanner treats a marked transaction as a system one: its outputs paying
+# QBT_LOCK_SCRIPT are pool change, not fresh deposits (QBitcoin::Coinbase::get_scripthash).
+sub tx_has_downgrade_marker {
+    my ($class, $btc_tx) = @_;
+    for my $out (@{$btc_tx->out}) {
+        return 1 if defined _marker_payload($out);
     }
     return 0;
 }
