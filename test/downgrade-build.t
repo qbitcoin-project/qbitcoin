@@ -12,7 +12,7 @@ use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
 use QBitcoin::Script qw(script_eval);
 use QBitcoin::Script::OpCodes qw(:OPCODES);
-use QBitcoin::Crypto qw(hash160 generate_keypair);
+use QBitcoin::Crypto qw(hash160 sha256 generate_keypair pk_import);
 use QBitcoin::Address qw(wallet_import_format);
 use QBitcoin::MyAddress;
 use QBitcoin::TXO;
@@ -21,26 +21,29 @@ use QBitcoin::Downgrade::Build;
 
 $config->{regtest} = 1;
 
-my $sys_wif = wallet_import_format(generate_keypair(CRYPT_ALGO_ECDSA)->pk_serialize);
-my $sys = QBitcoin::MyAddress->new(private_key => $sys_wif);
-my $sys_pk = $sys->pubkey;
+sub addr_of { QBitcoin::MyAddress->new(private_key => wallet_import_format($_[0]->pk_serialize)) }
+
+# Three test federation addresses (and an outsider) for an ad-hoc 2-of-3 freeze script.
+my @sys      = map { addr_of(generate_keypair(CRYPT_ALGO_ECDSA)) } 1 .. 3;
+my $outsider = addr_of(generate_keypair(CRYPT_ALGO_ECDSA));
 my $reclaim_id = "\x11" x 32;
 my $spk = "\x76\xa9\x14" . ("\xcc" x 20) . "\x88\xac";
 my $V   = 100 * DENOMINATOR;
 
-# A freeze script with a TEST system pubkey (mirrors QBT_FREEZE_SCRIPT structure)
-# so the IF (system spend) branch can be verified with a key we control.
+# A freeze script with TEST federation pubkeys (mirrors QBT_FREEZE_SCRIPT
+# structure: 2-of-3 CHECKMULTISIG, keys sorted) so the IF (system spend) branch
+# can be verified with keys we control.
 my $test_freeze =
     OP_IF .
     OP_7 . OP_TX_TYPE . OP_EQUALVERIFY .
-    chr(length($sys_pk)) . $sys_pk . OP_CHECKSIG .
+    OP_2 . join("", map { chr(length($_)) . $_ } sort map { $_->pubkey } @sys) . OP_3 . OP_CHECKMULTISIG .
     OP_ELSE .
     chr(4) . pack("V", DOWNGRADE_FREEZE_CSV) . OP_CSV . OP_DROP .
     OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr(32) . OP_SUBSTR .
     OP_OVER . OP_HASH256 . OP_EQUALVERIFY . OP_CHECKSIG .
     OP_ENDIF;
 
-# --- make_sign_freeze_if: system signs the IF branch of a downgrade ---
+# --- make_sign_freeze_if: the federation signs the IF branch of a downgrade ---
 {
     my $freeze_txo = QBitcoin::TXO->new_txo(tx_in => "\xaa" x 32, num => 0, value => $V,
         scripthash => hash160($test_freeze), data => $reclaim_id . $spk);
@@ -52,31 +55,46 @@ my $test_freeze =
     my $tx = QBitcoin::Transaction->new(in => [{ txo => $freeze_txo }], out => [$out],
         tx_type => TX_TYPE_DOWNGRADE, fee => 0, down => $commit, hash => "\x01" x 32);
 
-    # Sign with a fresh address object (nothing derived on it yet), the way the
-    # conversion service creates the system address from the bare private key.
-    my $sys_fresh = QBitcoin::MyAddress->new(private_key => $sys_wif);
-    $tx->make_sign_freeze_if($tx->in->[0], $sys_fresh, 0, $test_freeze);
-    is(scalar @{$tx->in->[0]{siglist}}, 2, "freeze-IF siglist [sig, '\\x01']");
-    ok(defined $tx->in->[0]{siglist}[0], "signature defined for an ad-hoc address object");
-    is($tx->in->[0]{siglist}[1], "\x01", "IF selector is true");
-    ok(script_eval($tx->in->[0]{siglist}, $test_freeze, $tx, 0),
-        "freeze-IF: system sig + TX_TYPE_DOWNGRADE passes the IF branch");
+    sub if_sign {
+        my ($tx, $signers) = @_;
+        $tx->make_sign_freeze_if($tx->in->[0], $signers, 0, $test_freeze);
+        return $tx->in->[0]{siglist};
+    }
+
+    my $siglist = if_sign($tx, [ @sys[0, 1] ]);
+    is(scalar @$siglist, 3, "freeze-IF siglist [sig, sig, '\\x01']");
+    ok(defined $siglist->[0] && defined $siglist->[1], "both signatures defined");
+    is($siglist->[2], "\x01", "IF selector is true");
+    ok(script_eval($siglist, $test_freeze, $tx, 0),
+        "freeze-IF: 2 federation sigs + TX_TYPE_DOWNGRADE pass the IF branch");
+
+    # Any pair of the three works, whatever the argument order (sigs are ordered
+    # by pubkey to match the sorted script keys).
+    ok(script_eval(if_sign($tx, [ @sys[1, 2] ]), $test_freeze, $tx, 0), "pair (2,3) passes");
+    ok(script_eval(if_sign($tx, [ @sys[2, 0] ]), $test_freeze, $tx, 0), "pair (3,1) passes in any argument order");
+
+    # 1-of-3 is not enough; a doubled key is not two signers; outsiders don't count.
+    ok(!script_eval(if_sign($tx, $sys[0]), $test_freeze, $tx, 0), "a single signature fails");
+    ok(!script_eval(if_sign($tx, [ @sys[0, 0] ]), $test_freeze, $tx, 0), "the same key twice fails");
+    ok(!script_eval(if_sign($tx, [ $outsider, $sys[0] ]), $test_freeze, $tx, 0), "an outsider signature fails");
 
     # A non-downgrade transaction must not pass the IF branch.
     my $proof = QBitcoin::Downgrade->new({ btc_block_hash => "\x00" x 32, btc_tx_num => 0, merkle_path => "", btc_tx_data => "\x00" });
     my $tx_burn = QBitcoin::Transaction->new(in => [{ txo => $freeze_txo }], out => [],
         tx_type => TX_TYPE_BURN, fee => 0, down => $proof, hash => "\x02" x 32);
-    $tx_burn->make_sign_freeze_if($tx_burn->in->[0], $sys, 0, $test_freeze);
-    ok(!script_eval($tx_burn->in->[0]{siglist}, $test_freeze, $tx_burn, 0),
+    ok(!script_eval(if_sign($tx_burn, [ @sys[0, 1] ]), $test_freeze, $tx_burn, 0),
         "freeze-IF: non-DOWNGRADE tx fails OP_TX_TYPE/EQUALVERIFY");
 }
 
 # --- build_downgrade_tx: structure of the constructed downgrade transaction ---
 {
+    # Two of the three regtest federation addresses, from the derivable dev keys
+    # (see QBT_FREEZE_PUBKEYS in QBitcoin::BlockchainParams).
+    my @fed = map { addr_of(pk_import(sha256("QBTC:REGTEST:FREEZE:$_"), CRYPT_ALGO_ECDSA)) } qw(A B);
     my $freeze_txo = QBitcoin::TXO->new_txo(tx_in => "\xbb" x 32, num => 0, value => $V,
         scripthash => hash160(QBT_FREEZE_SCRIPT), data => $reclaim_id . $spk);
     my $tx = QBitcoin::Downgrade::Build->build_downgrade_tx($freeze_txo,
-        system_address => $sys, btc_txid => "\xee" x 32, btc_vout => 3, btc_value => 99_000);
+        system_addresses => \@fed, btc_txid => "\xee" x 32, btc_vout => 3, btc_value => 99_000);
     ok($tx, "build_downgrade_tx returns a transaction");
     ok($tx->is_downgrade, "tx_type is DOWNGRADE");
     is($tx->fee, 0, "zero fee");
@@ -90,7 +108,12 @@ my $test_freeze =
     is($tx->out->[0]->scripthash, hash160(QBT_DOWNGRADE_SCRIPT), "output is the downgrade-output script");
     is($tx->out->[0]->data, $reclaim_id, "output carries the reclaim_id");
     is($tx->out->[0]->value, $V, "output value equals the freeze value");
-    is(scalar @{$tx->in->[0]{siglist}}, 2, "freeze-IF siglist present");
+    is(scalar @{$tx->in->[0]{siglist}}, 3, "freeze-IF siglist present");
+    ok(script_eval($tx->in->[0]{siglist}, QBT_FREEZE_SCRIPT, $tx, 0),
+        "the built pin passes the real QBT_FREEZE_SCRIPT with the regtest federation keys");
+    ok(!QBitcoin::Downgrade::Build->build_downgrade_tx($freeze_txo,
+        system_address => $fed[0], btc_txid => "\xee" x 32, btc_vout => 3, btc_value => 99_000),
+        "build_downgrade_tx requires the system_addresses arrayref");
 }
 
 done_testing();
