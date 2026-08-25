@@ -51,7 +51,9 @@ sub pubkey_by_privkey {
     return substr($self->pk->export_key_raw('public_compressed'), 1);
 }
 
-# BIP-340: use sign_message (deterministic Schnorr, 64-byte signature)
+# BIP-340 Schnorr via sign_message (64-byte signature). NOTE: without an $aux
+# argument Crypt::PK::ECC::Schnorr uses a random nonce, so signatures are NOT
+# deterministic (same key + message signs differently each time).
 sub signature {
     my $self = shift;
     my ($data) = @_;
