@@ -18,7 +18,6 @@ sub _stop_utxo_set {
 
 use constant MAINNET => {
     GENESIS_HASH       => pack("H*", ""),
-    QBT_LOCK_PUBKEY    => pack("H*", "03c3fe5cc51c8c1d6b04ec0fe00d3487863c0eec33ac6360095700868d66de19ff"),
     # BTC pubkeys of the three federation operators behind the deposit/pool address
     # (2-of-3, see QBT_LOCK_WITNESS_SCRIPT / QBT_LOCK_SCRIPT below); any order here,
     # the witnessScript sorts them (BIP67).
@@ -78,7 +77,6 @@ use constant MAINNET => {
 };
 use constant TESTNET => {
     GENESIS_HASH       => pack("H*", "9a23986048cffb3b5115365cd94fe58441703653e561e0ff89f00c68a424b342"),
-    QBT_LOCK_PUBKEY    => pack("H*", "02943a59688f1eceb1d068f6ac0ff84c8f17b2c3714269aec2185422cd61b748b6"),
     # PLACEHOLDER, address 2NBqgqi19eaHgtRpVeUPecY1UeQGytUoRVQ: publicly derivable keys
     # sha256("QBTC:TESTNET:LOCK:PLACEHOLDER:{A,B,C}"); replace with the testnet
     # operators' keys before the next split.
@@ -182,8 +180,6 @@ BEGIN {
     }
 };
 
-sub QBT_BURN_SCRIPT() { state $qbt_burn_script = pack("C", length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
-sub QBT_BURN_LEN()    { state $qbt_burn_len = length(QBT_BURN_SCRIPT) }
 
 # The BTC-side system address: btc->qbt upgrade deposits are recognized by an
 # output paying QBT_LOCK_SCRIPT, and the same address holds the frozen BTC pool
@@ -283,8 +279,6 @@ use Exporter 'import';
 our @EXPORT = (
     keys %{&MAINNET},
     keys %{&COMMON_CONST},
-    'QBT_BURN_SCRIPT',
-    'QBT_BURN_LEN',
     'QBT_LOCK_WITNESS_SCRIPT',
     'QBT_LOCK_REDEEM_SCRIPT',
     'QBT_LOCK_SCRIPTSIG',

@@ -35,11 +35,6 @@ use Role::Tiny::With;
 with 'QBitcoin::Transaction::Tokens';
 with 'QBitcoin::Transaction::Signature';
 
-# Scripthash of the qbt_burn address (QBT_BURN_SCRIPT), precomputed once.
-# Outputs to this scripthash whose data field contains a valid Bitcoin address
-# string (ASCII) are downgrade requests; the address is shown by decoderawtransaction.
-use constant QBT_BURN_SCRIPTHASH => hash160(QBT_BURN_SCRIPT);
-
 # QBT_FREEZE_SCRIPTHASH / QBT_DOWNGRADE_SCRIPTHASH come from QBitcoin::Const.
 use constant QBT_RECLAIM_ID_LEN => 32;   # reclaim_id = hash256(pubkey)
 
@@ -1372,11 +1367,6 @@ sub validate {
         }
         if (length(serialize_siglist($in->{siglist} // [])) > MAX_SIGLIST_SIZE) {
             Warningf("Too large siglist size in transaction %s input %s:%u",
-                $self->hash_str, $txo->tx_in_str, $txo->num);
-            return -1;
-        }
-        if (($txo->scripthash // "") eq QBT_BURN_SCRIPTHASH) {
-            Warningf("Non-burn transaction %s attempts to spend qbt_burn output %s:%u",
                 $self->hash_str, $txo->tx_in_str, $txo->num);
             return -1;
         }
