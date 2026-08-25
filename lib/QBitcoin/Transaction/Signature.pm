@@ -69,19 +69,25 @@ sub sign_transaction {
     $self->calculate_hash;
 }
 
-# Sign the system (IF) branch of a freeze script: the conversion service spends the
-# freeze into a TX_TYPE_DOWNGRADE. siglist: [ sig, "\x01" ]  ("\x01" = OP_TRUE = IF).
-# The CHECKSIG in the script is against QBT_LOCK_PUBKEY, so $address must hold the
-# system key.
+# Sign the system (IF) branch of a freeze script: the downgrade federation spends
+# the freeze into a TX_TYPE_DOWNGRADE. The IF branch is a 2-of-3 CHECKMULTISIG over
+# QBT_FREEZE_PUBKEYS, so $addresses is an arrayref of the signing federation
+# addresses (a plain address object is accepted too). CHECKMULTISIG matches
+# signatures against the script keys in order, and the script keys are sorted, so
+# the signatures are ordered by their pubkeys; qbtc's CHECKMULTISIG pops no extra
+# dummy element. siglist: [ sig, ..., "\x01" ]  ("\x01" = OP_TRUE = IF).
 sub make_sign_freeze_if {
     my $self = shift;
-    my ($in, $address, $input_num, $redeem_script) = @_;
+    my ($in, $addresses, $input_num, $redeem_script) = @_;
 
     $in->{txo}->set_redeem_script($redeem_script);
-    my $sign_alg     = _sign_alg($address);
     my $sighash_type = SIGHASH_ALL;
-    my $sig = signature($self->sign_data($input_num, $sighash_type), $address, $sign_alg, $sighash_type);
-    $in->{siglist} = [ $sig, "\x01" ];
+    my $sign_data = $self->sign_data($input_num, $sighash_type);
+    my @sig = map  { $_->[1] }
+              sort { $a->[0] cmp $b->[0] }
+              map  { [ $_->pubkey, signature($sign_data, $_, _sign_alg($_), $sighash_type) ] }
+              ref($addresses) eq 'ARRAY' ? @$addresses : ($addresses);
+    $in->{siglist} = [ @sig, "\x01" ];
 }
 
 # Sign the user-reclaim (ELSE) branch of a freeze or downgrade-output script.

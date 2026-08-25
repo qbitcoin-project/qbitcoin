@@ -2,9 +2,10 @@ package QBitcoin::Downgrade::Build;
 use warnings;
 use strict;
 
-# Build (and system-sign) a TX_TYPE_DOWNGRADE transaction. Used by the conversion
-# service, which holds the system key (QBT_LOCK) and has already created the BTC
-# payment to the user's committed scriptPubKey.
+# Build (and system-sign) a TX_TYPE_DOWNGRADE transaction. Used by the downgrade
+# federation members, who hold the freeze keys (2 of the 3 QBT_FREEZE_PUBKEYS sign
+# the pin) and have already created the BTC payment to the user's committed
+# scriptPubKey.
 #
 # The downgrade transaction:
 #   - spends the user's freeze output via the system (IF) branch;
@@ -25,7 +26,7 @@ use QBitcoin::Downgrade;
 use QBitcoin::TXO;
 use QBitcoin::Transaction;
 
-# build_downgrade_tx($freeze_txo, system_address => $addr, btc_txid => ..., btc_vout => ..., btc_value => ...)
+# build_downgrade_tx($freeze_txo, system_addresses => [$addr1, $addr2], btc_txid => ..., btc_vout => ..., btc_value => ...)
 # Returns the signed (unbroadcast) downgrade transaction, or undef on error.
 sub build_downgrade_tx {
     my $class = shift;
@@ -40,6 +41,11 @@ sub build_downgrade_tx {
     my $data = $freeze_txo->data // "";
     if (length($data) < $reclaim_len) {
         Errf("build_downgrade_tx: freeze data too short");
+        return undef;
+    }
+    my $signers = $args{system_addresses};
+    unless (ref($signers) eq 'ARRAY' && @$signers) {
+        Errf("build_downgrade_tx: system_addresses arrayref is required");
         return undef;
     }
     my $reclaim_id   = substr($data, 0, $reclaim_len);
@@ -66,7 +72,7 @@ sub build_downgrade_tx {
         down          => $commit,
         received_time => time(),
     );
-    $tx->make_sign_freeze_if($tx->in->[0], $args{system_address}, 0, $freeze_script);
+    $tx->make_sign_freeze_if($tx->in->[0], $signers, 0, $freeze_script);
     $tx->calculate_hash;
     return $tx;
 }
