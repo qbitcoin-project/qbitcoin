@@ -30,6 +30,17 @@ use constant MAINNET => {
         pack("H*", "038c3261f1f3dc222639105fccff6c2dcbd443d4708ef3210c590908371b0c868e"),
         pack("H*", "035b6bde0b82ac598c52d6f2dc0975c0b8d04b3e3df2403f4e2f3331547aa00c16"),
     ],
+    # QBTC pubkeys of the three federation operators signing downgrade (pin)
+    # transactions: the freeze-script IF branch is 2-of-3 of them (see _freeze_if
+    # below); any order here, the script sorts them. Separate keypairs from
+    # QBT_LOCK_PUBKEYS: these sign on the qbtc chain, those on the BTC chain.
+    # PLACEHOLDER: publicly derivable keys sha256("QBTC:MAINNET:FREEZE:PLACEHOLDER:{A,B,C}");
+    # MUST be replaced with the real operators' keys before launch.
+    QBT_FREEZE_PUBKEYS => [
+        pack("H*", "02f20842a095bc49c4fcd07b4aa3f2739d788e83d99338d7ec0f50fd18cfe84d64"),
+        pack("H*", "0296718866305bbffe8a5033495e35ac3824dfd97a23989fc88ba1dadca3221836"),
+        pack("H*", "02809a7885b7c5925bc6fa9bcd0dff35ab1faf0e5f757b2ceee1a8b8c6804a8bb6"),
+    ],
     ADDRESS_VER        => "\x80",
     DELEG_KEY_VER256   => "\x8d", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
     DELEG_KEY_VER160   => "\x8e", # delegation WIF: privkey + hash160(delegate pubkey), pre-quantum delegate key
@@ -76,6 +87,13 @@ use constant TESTNET => {
         pack("H*", "027dd3829de404f13bd5c8b9def6c936f728429519916d4c152a22cd20f31e2512"),
         pack("H*", "02ad9e9c19d189e6656a2a583028f757745e607b2d3755db1680dcaa131b533426"),
     ],
+    # PLACEHOLDER: sha256("QBTC:TESTNET:FREEZE:PLACEHOLDER:{A,B,C}"); replace with the
+    # testnet operators' keys before the next split.
+    QBT_FREEZE_PUBKEYS => [
+        pack("H*", "035549bbafd7b439a9764151ecdb2510d9956845ccabb6ec4661face045a9735af"),
+        pack("H*", "02a5fc31f86e612a12cb92077500ad83d7023a659b7dadd8856e926edf75df1e22"),
+        pack("H*", "037cee6df7fa27fe46a47a4e941f4288d14c38304c79db96a09fc984c47718e372"),
+    ],
     ADDRESS_VER        => "\xef",
     DELEG_KEY_VER256   => "\xf0", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
     DELEG_KEY_VER160   => "\xf1", # delegation WIF: privkey + hash160(delegate pubkey), pre-quantum delegate key
@@ -108,6 +126,13 @@ use constant REGTEST => {
         pack("H*", "0257b3c47b272acf97881d3c1f65c122dcbd1098c218dd7a9d612fce02b87c9599"),
         pack("H*", "02a9e30e791334d7cc4ababd3cb6e5795668f654d434e941aa96ee23442643ad07"),
         pack("H*", "03cd91e21e72efff1cbaf0c70837a791c163e7b508f775de47bd7a6bacef3a6c1f"),
+    ],
+    # Regtest freeze federation dev keys, intentionally derivable as
+    # sha256("QBTC:REGTEST:FREEZE:{A,B,C}") so tests can sign downgrade pins.
+    QBT_FREEZE_PUBKEYS => [
+        pack("H*", "0366c664ba2dde9c8931786e269f0227f96b2ea07c7cf7fe4f887862aa30351817"),
+        pack("H*", "0211c906662c581837d270de164e4117d188edfb099248fa68846615ecbee6ad84"),
+        pack("H*", "035e2e8ee57e1e110b5b37db3d13a3a00d7cb9610434521a9bcdbe4be5ca131358"),
     ],
     PORT               => 29555,
     RPC_PORT           => 29556,
@@ -218,10 +243,20 @@ sub _reclaim_script {
 # scriptPubKey]. reclaim_id is always hash256(pubkey): a single script serves both
 # EC and post-quantum reclaim keys (OP_CHECKSIG dispatches on the signature class,
 # and the key store indexes pubkeys by both hash160 and hash256). The IF branch is
-# spendable only by the system (QBT_LOCK_PUBKEY) and only in a TX_TYPE_DOWNGRADE:
-# this keeps grief pinning out (only the conversion service may move a freeze into a
-# downgrade). Otherwise the user reclaims their QBTC after DOWNGRADE_FREEZE_SEC.
-sub _freeze_if()            { OP_7 . OP_TX_TYPE . OP_EQUALVERIFY . chr(length(QBT_LOCK_PUBKEY)) . QBT_LOCK_PUBKEY . OP_CHECKSIG }
+# spendable only by the downgrade federation - 2 of the 3 QBT_FREEZE_PUBKEYS, keys
+# in the script in lexicographic order - and only in a TX_TYPE_DOWNGRADE: grief
+# pinning (committing a freeze to a payment that never comes) requires compromising
+# two operators, not one. Otherwise the user reclaims after DOWNGRADE_FREEZE_SEC.
+# Note: qbtc's OP_CHECKMULTISIG pops no extra dummy element (the bitcoin bug is not
+# reproduced), so the siglist is exactly [sig, sig, "\x01"].
+sub _freeze_if() {
+    state $freeze_if = do {
+        my @pubkeys = @{&QBT_FREEZE_PUBKEYS};
+        @pubkeys == 3 or die "QBT_FREEZE_PUBKEYS must be three pubkeys";
+        OP_7 . OP_TX_TYPE . OP_EQUALVERIFY .
+            OP_2 . join("", map { pack("C", length($_)) . $_ } sort @pubkeys) . OP_3 . OP_CHECKMULTISIG;
+    };
+}
 sub QBT_FREEZE_SCRIPT()     { state $qbt_freeze_script = _reclaim_script(_freeze_if(), DOWNGRADE_FREEZE_CSV, 32, OP_HASH256) }
 sub QBT_FREEZE_SCRIPTHASH() { state $qbt_freeze_scripthash = hash160(QBT_FREEZE_SCRIPT) }
 
