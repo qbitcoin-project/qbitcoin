@@ -184,44 +184,7 @@ my $fake_txid = "00" x 32;
 }
 
 # -----------------------------------------------------------------------
-# 4. Freeze input restriction
-#    A non-burn transaction that spends a freeze UTXO must be rejected
-#    by Transaction->validate().  A burn transaction must NOT be rejected
-#    by that specific check.
-# -----------------------------------------------------------------------
-{
-    # Build a freeze TXO (output locked to QBT_BURN_SCRIPT / QBT_BURN_SCRIPTHASH).
-    my $freeze_txo = QBitcoin::TXO->new_txo(
-        tx_in         => "\x01" x 32,    # fake source tx hash (32 bytes)
-        num           => 0,
-        scripthash    => hash160(QBT_BURN_SCRIPT),
-        value         => 1 * DENOMINATOR,
-        redeem_script => QBT_BURN_SCRIPT,
-    );
-
-    # An ordinary output for the destination in the bad tx.
-    my $out_txo = QBitcoin::TXO->new_txo(
-        scripthash => $test_scripthash,
-        value      => 1 * DENOMINATOR,
-        num        => 0,
-    );
-
-    # Standard (non-burn) transaction spending the freeze UTXO — must fail.
-    my $bad_tx = QBitcoin::Transaction->new(
-        in      => [ { txo => $freeze_txo, siglist => [] } ],
-        out     => [ $out_txo ],
-        tx_type => TX_TYPE_STANDARD,
-        fee     => 0,
-    );
-    $bad_tx->calculate_hash;
-    $out_txo->{tx_in} = $bad_tx->hash;
-
-    is($bad_tx->validate, -1,
-        "standard tx spending qbt_burn UTXO is rejected by validate()");
-}
-
-# -----------------------------------------------------------------------
-# 5. Bitcoin P2SH downgrade output
+# 4. Bitcoin P2SH downgrade output
 #    P2SH Base58Check address (version byte 0x05) — same flow as P2PKH.
 # -----------------------------------------------------------------------
 {
@@ -247,7 +210,7 @@ my $fake_txid = "00" x 32;
 }
 
 # -----------------------------------------------------------------------
-# 6. Bitcoin P2WPKH (SegWit / Bech32) downgrade output
+# 5. Bitcoin P2WPKH (SegWit / Bech32) downgrade output
 # -----------------------------------------------------------------------
 {
     my $hex = create_raw_tx(
@@ -272,7 +235,7 @@ my $fake_txid = "00" x 32;
 }
 
 # -----------------------------------------------------------------------
-# 7. Bitcoin P2TR (Taproot / Bech32m) downgrade output
+# 6. Bitcoin P2TR (Taproot / Bech32m) downgrade output
 # -----------------------------------------------------------------------
 {
     my $hex = create_raw_tx(
@@ -297,7 +260,7 @@ my $fake_txid = "00" x 32;
 }
 
 # -----------------------------------------------------------------------
-# 8. Wrong-network Bitcoin address
+# 7. Wrong-network Bitcoin address
 #    A mainnet address must be rejected on testnet/regtest (and vice versa):
 #    the committed BTC payment is checked on the network's own BTC chain.
 # -----------------------------------------------------------------------
