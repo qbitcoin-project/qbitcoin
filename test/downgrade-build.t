@@ -114,6 +114,15 @@ my $test_freeze =
     ok(!QBitcoin::Downgrade::Build->build_downgrade_tx($freeze_txo,
         system_address => $fed[0], btc_txid => "\xee" x 32, btc_vout => 3, btc_value => 99_000),
         "build_downgrade_tx requires the system_addresses arrayref");
+
+    # The unsigned construction is the same deterministic object the signed one
+    # is made of: identical signing preimage, no signatures yet.
+    my $unsigned = QBitcoin::Downgrade::Build->build_downgrade_unsigned($freeze_txo,
+        btc_txid => "\xee" x 32, btc_vout => 3, btc_value => 99_000);
+    ok($unsigned, "build_downgrade_unsigned returns a transaction");
+    ok(!$unsigned->in->[0]{siglist}, "unsigned pin carries no siglist");
+    is($unsigned->sign_data(0, SIGHASH_ALL), $tx->sign_data(0, SIGHASH_ALL),
+        "signing preimage matches the signed pin's");
 }
 
 done_testing();
