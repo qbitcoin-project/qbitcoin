@@ -20,14 +20,11 @@ use constant MAINNET => {
     GENESIS_HASH       => pack("H*", ""),
     # BTC pubkeys of the three federation operators behind the deposit/pool address
     # (2-of-3, see QBT_LOCK_WITNESS_SCRIPT / QBT_LOCK_SCRIPT below); any order here,
-    # the witnessScript sorts them (BIP67).
-    # PLACEHOLDER, address 3QZoPmLvhUZdmSgYqPtaXiGhZbYNP9EWhH: publicly derivable keys
-    # sha256("QBTC:MAINNET:LOCK:PLACEHOLDER:{A,B,C}"); MUST be replaced with the real
-    # operators' keys (one ground for the 3QBTC... vanity prefix) before launch.
+    # the witnessScript sorts them (BIP67). Address: 3QBTC3wxgSPUbKLqjZjh6aGwM3yKHWhaLU
     QBT_LOCK_PUBKEYS   => [
-        pack("H*", "038cfedef8e54db075343268c0e78cd2f43ff607f1ddf12bd89339cbd49d7d67ea"),
-        pack("H*", "038c3261f1f3dc222639105fccff6c2dcbd443d4708ef3210c590908371b0c868e"),
-        pack("H*", "035b6bde0b82ac598c52d6f2dc0975c0b8d04b3e3df2403f4e2f3331547aa00c16"),
+        pack("H*", "024ee83659c56ad0663c324cbeaf4cf969ed2c8171af7b5f71afcef472321f22f7"),
+        pack("H*", "032a20877b907de2a1a9ee1ce5043f1dd324605a24c64e41663ce8905ac45d2f1c"),
+        pack("H*", "026463dbd08255e4c5930d889902cf0b02efba68c0de392c2cfe10e8e4f8e6bac6"),
     ],
     # QBTC pubkeys of the three federation operators signing downgrade (pin)
     # transactions: the freeze-script IF branch is 2-of-3 of them (see _freeze_if
@@ -77,13 +74,11 @@ use constant MAINNET => {
 };
 use constant TESTNET => {
     GENESIS_HASH       => pack("H*", "9a23986048cffb3b5115365cd94fe58441703653e561e0ff89f00c68a424b342"),
-    # PLACEHOLDER, address 2NBqgqi19eaHgtRpVeUPecY1UeQGytUoRVQ: publicly derivable keys
-    # sha256("QBTC:TESTNET:LOCK:PLACEHOLDER:{A,B,C}"); replace with the testnet
-    # operators' keys before the next split.
+    # Address: 2MtQBTCa85CFPFa45Tc19DmuYa3XhfSuD8D
     QBT_LOCK_PUBKEYS   => [
-        pack("H*", "023b110b5bf56ab9e0be8725f96df493b8cd07dca1d816eb336f0358ad299731b5"),
-        pack("H*", "027dd3829de404f13bd5c8b9def6c936f728429519916d4c152a22cd20f31e2512"),
-        pack("H*", "02ad9e9c19d189e6656a2a583028f757745e607b2d3755db1680dcaa131b533426"),
+        pack("H*", "032dccf5c2c79a5298dd7e1f1aaf9db35f0b2082c4a7ed599a2fb5bfad5b4e3f36"),
+        pack("H*", "03c7f19d0502dd1db33fb5298efbc16848d9c7431ee88fb0fb929205580395599a"),
+        pack("H*", "03acebbd33221306e9263cb6d03f7ed33e4bccbc85dc5bef7e49882351650b4909"),
     ],
     # PLACEHOLDER: sha256("QBTC:TESTNET:FREEZE:PLACEHOLDER:{A,B,C}"); replace with the
     # testnet operators' keys before the next split.
