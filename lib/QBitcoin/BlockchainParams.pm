@@ -28,14 +28,12 @@ use constant MAINNET => {
     ],
     # QBTC pubkeys of the three federation operators signing downgrade (pin)
     # transactions: the freeze-script IF branch is 2-of-3 of them (see _freeze_if
-    # below); any order here, the script sorts them. Separate keypairs from
-    # QBT_LOCK_PUBKEYS: these sign on the qbtc chain, those on the BTC chain.
-    # PLACEHOLDER: publicly derivable keys sha256("QBTC:MAINNET:FREEZE:PLACEHOLDER:{A,B,C}");
-    # MUST be replaced with the real operators' keys before launch.
+    # below); any order here, the script sorts them. The same operator keys as
+    # QBT_LOCK_PUBKEYS: one keypair per operator serves both chains.
     QBT_FREEZE_PUBKEYS => [
-        pack("H*", "02f20842a095bc49c4fcd07b4aa3f2739d788e83d99338d7ec0f50fd18cfe84d64"),
-        pack("H*", "0296718866305bbffe8a5033495e35ac3824dfd97a23989fc88ba1dadca3221836"),
-        pack("H*", "02809a7885b7c5925bc6fa9bcd0dff35ab1faf0e5f757b2ceee1a8b8c6804a8bb6"),
+        pack("H*", "024ee83659c56ad0663c324cbeaf4cf969ed2c8171af7b5f71afcef472321f22f7"),
+        pack("H*", "032a20877b907de2a1a9ee1ce5043f1dd324605a24c64e41663ce8905ac45d2f1c"),
+        pack("H*", "026463dbd08255e4c5930d889902cf0b02efba68c0de392c2cfe10e8e4f8e6bac6"),
     ],
     ADDRESS_VER        => "\x80",
     DELEG_KEY_VER256   => "\x8d", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
@@ -80,12 +78,11 @@ use constant TESTNET => {
         pack("H*", "03c7f19d0502dd1db33fb5298efbc16848d9c7431ee88fb0fb929205580395599a"),
         pack("H*", "03acebbd33221306e9263cb6d03f7ed33e4bccbc85dc5bef7e49882351650b4909"),
     ],
-    # PLACEHOLDER: sha256("QBTC:TESTNET:FREEZE:PLACEHOLDER:{A,B,C}"); replace with the
-    # testnet operators' keys before the next split.
+    # The same operator keys as QBT_LOCK_PUBKEYS above.
     QBT_FREEZE_PUBKEYS => [
-        pack("H*", "035549bbafd7b439a9764151ecdb2510d9956845ccabb6ec4661face045a9735af"),
-        pack("H*", "02a5fc31f86e612a12cb92077500ad83d7023a659b7dadd8856e926edf75df1e22"),
-        pack("H*", "037cee6df7fa27fe46a47a4e941f4288d14c38304c79db96a09fc984c47718e372"),
+        pack("H*", "032dccf5c2c79a5298dd7e1f1aaf9db35f0b2082c4a7ed599a2fb5bfad5b4e3f36"),
+        pack("H*", "03c7f19d0502dd1db33fb5298efbc16848d9c7431ee88fb0fb929205580395599a"),
+        pack("H*", "03acebbd33221306e9263cb6d03f7ed33e4bccbc85dc5bef7e49882351650b4909"),
     ],
     ADDRESS_VER        => "\xef",
     DELEG_KEY_VER256   => "\xf0", # delegation WIF: privkey + hash256(delegate pubkey), post-quantum delegate key
