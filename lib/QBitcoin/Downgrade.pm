@@ -179,20 +179,12 @@ sub validate_spv {
         return -1;
     }
     my $marker = (ref($self) || $self)->downgrade_marker($commit->freeze_txid, $commit->freeze_vout);
-    unless (_tx_has_marker($btc_tx, $marker)) {
+    unless ($self->tx_has_downgrade_marker($btc_tx, $marker)) {
         Warningf("BTC downgrade tx %s has no marker for freeze %s:%u",
             $btc_tx->hash_hex, unpack("H*", $commit->freeze_txid), $commit->freeze_vout);
         return -1;
     }
 
-    return 0;
-}
-
-sub _tx_has_marker {
-    my ($btc_tx, $marker) = @_;
-    for my $out (@{$btc_tx->out}) {
-        return 1 if (_marker_payload($out) // "") eq $marker;
-    }
     return 0;
 }
 
@@ -209,14 +201,16 @@ sub _marker_payload {
     return substr($script, 2);
 }
 
-# True if any output carries a strict-format downgrade marker, whichever freeze it
+# True if any output carries a strict-format downgrade marker: with $marker, the
+# one committing to a specific freeze (validate_spv); without, whichever freeze it
 # references. Every release (and any other pool spend) carries one, so the upgrade
 # scanner treats a marked transaction as a system one: its outputs paying
 # QBT_LOCK_SCRIPT are pool change, not fresh deposits (QBitcoin::Coinbase::get_scripthash).
 sub tx_has_downgrade_marker {
-    my ($class, $btc_tx) = @_;
-    for my $out (@{$btc_tx->out}) {
-        return 1 if defined _marker_payload($out);
+    my ($class, $btc_tx, $marker) = @_;
+    foreach my $out (@{$btc_tx->out}) {
+        my $payload = _marker_payload($out) // next;
+        return 1 if !defined($marker) || $payload eq $marker;
     }
     return 0;
 }
