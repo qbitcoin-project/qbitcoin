@@ -105,7 +105,9 @@ use constant TESTNET => {
     BTC_BECH32_HRP     => "tb",
     UPGRADE_FINISHED   => 0,
     UPGRADE_STOP_UTXO  => _stop_utxo_set(),
-    CHECKPOINTS        => {},
+    CHECKPOINTS        => {
+        3000 => pack("H*", "20e0dfa02b4ab01b44bda94112f1cbeaabe3c1bf51a568263a39a70a47054d4e"),
+    },
 };
 use constant REGTEST => {
     GENESIS_HASH       => pack("H*", ""),
