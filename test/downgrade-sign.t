@@ -28,7 +28,7 @@ my $V   = 100 * DENOMINATOR;
 sub reclaim_tx {
     my ($freeze_script, $data) = @_;
     my $in_txo = QBitcoin::TXO->new_txo(tx_in => "\xaa" x 32, num => 0, value => $V,
-        scripthash => hash160($freeze_script), data => $data);
+        scripthash => hash256($freeze_script), data => $data);
     my $out = QBitcoin::TXO->new_txo(value => $V, num => 0, scripthash => "\x33" x 20);
     return QBitcoin::Transaction->new(in => [{ txo => $in_txo }], out => [$out], tx_type => TX_TYPE_STANDARD, fee => 0);
 }
