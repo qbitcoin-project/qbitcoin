@@ -10,9 +10,10 @@ use Test::More;
 use QBitcoin::Config;
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
-use QBitcoin::Script qw(script_eval);
+use QBitcoin::Script qw(script_eval op_pushdata);
 use QBitcoin::Script::OpCodes qw(:OPCODES);
-use QBitcoin::Crypto qw(hash160 sha256 generate_keypair pk_import);
+use QBitcoin::Crypto qw(hash256 generate_keypair);
+use QBitcoin::Test::FederationKeys qw(FREEZE_KEYS);
 use QBitcoin::Address qw(wallet_import_format);
 use QBitcoin::MyAddress;
 use QBitcoin::TXO;
@@ -24,8 +25,8 @@ $config->{regtest} = 1;
 sub addr_of { QBitcoin::MyAddress->new(private_key => wallet_import_format($_[0]->pk_serialize)) }
 
 # Three test federation addresses (and an outsider) for an ad-hoc 2-of-3 freeze script.
-my @sys      = map { addr_of(generate_keypair(CRYPT_ALGO_ECDSA)) } 1 .. 3;
-my $outsider = addr_of(generate_keypair(CRYPT_ALGO_ECDSA));
+my @sys      = map { addr_of(generate_keypair(CRYPT_ALGO_FALCON)) } 1 .. 3;
+my $outsider = addr_of(generate_keypair(CRYPT_ALGO_FALCON));
 my $reclaim_id = "\x11" x 32;
 my $spk = "\x76\xa9\x14" . ("\xcc" x 20) . "\x88\xac";
 my $V   = 100 * DENOMINATOR;
@@ -36,7 +37,7 @@ my $V   = 100 * DENOMINATOR;
 my $test_freeze =
     OP_IF .
     OP_7 . OP_TX_TYPE . OP_EQUALVERIFY .
-    OP_2 . join("", map { chr(length($_)) . $_ } sort map { $_->pubkey } @sys) . OP_3 . OP_CHECKMULTISIG .
+    OP_2 . join("", map { op_pushdata($_) } sort map { $_->pubkey } @sys) . OP_3 . OP_CHECKMULTISIG .
     OP_ELSE .
     chr(4) . pack("V", DOWNGRADE_FREEZE_CSV) . OP_CSV . OP_DROP .
     OP_OUTPUTDATA . chr(1) . chr(0) . chr(1) . chr(32) . OP_SUBSTR .
@@ -46,8 +47,8 @@ my $test_freeze =
 # --- make_sign_freeze_if: the federation signs the IF branch of a downgrade ---
 {
     my $freeze_txo = QBitcoin::TXO->new_txo(tx_in => "\xaa" x 32, num => 0, value => $V,
-        scripthash => hash160($test_freeze), data => $reclaim_id . $spk);
-    my $out = QBitcoin::TXO->new_txo(value => $V, scripthash => hash160(QBT_DOWNGRADE_SCRIPT), data => $reclaim_id);
+        scripthash => hash256($test_freeze), data => $reclaim_id . $spk);
+    my $out = QBitcoin::TXO->new_txo(value => $V, scripthash => QBT_DOWNGRADE_SCRIPTHASH, data => $reclaim_id);
     my $commit = QBitcoin::Downgrade->new({
         freeze_txid => $freeze_txo->tx_in, freeze_vout => $freeze_txo->num,
         btc_txid => "\xcd" x 32, btc_vout => 0, btc_value => $V, scriptpubkey => $spk,
@@ -88,11 +89,11 @@ my $test_freeze =
 
 # --- build_downgrade_tx: structure of the constructed downgrade transaction ---
 {
-    # Two of the three regtest federation addresses, from the derivable dev keys
-    # (see QBT_FREEZE_PUBKEYS in QBitcoin::BlockchainParams).
-    my @fed = map { addr_of(pk_import(sha256("QBTC:REGTEST:FREEZE:$_"), CRYPT_ALGO_ECDSA)) } qw(A B);
+    # Two of the three regtest federation addresses, from the dev key fixtures
+    # (their public halves are QBT_FREEZE_PUBKEYS in QBitcoin::BlockchainParams).
+    my @fed = map { QBitcoin::MyAddress->new(private_key => wallet_import_format(FREEZE_KEYS->{$_})) } qw(A B);
     my $freeze_txo = QBitcoin::TXO->new_txo(tx_in => "\xbb" x 32, num => 0, value => $V,
-        scripthash => hash160(QBT_FREEZE_SCRIPT), data => $reclaim_id . $spk);
+        scripthash => QBT_FREEZE_SCRIPTHASH, data => $reclaim_id . $spk);
     my $tx = QBitcoin::Downgrade::Build->build_downgrade_tx($freeze_txo,
         system_addresses => \@fed, btc_txid => "\xee" x 32, btc_vout => 3, btc_value => 99_000);
     ok($tx, "build_downgrade_tx returns a transaction");
@@ -105,7 +106,7 @@ my $test_freeze =
     is($tx->down->btc_value,    99_000,      "commitment btc_value");
     is($tx->down->scriptpubkey, $spk,        "commitment scriptpubkey copied from freeze data");
     is(scalar @{$tx->out}, 1, "one downgrade output");
-    is($tx->out->[0]->scripthash, hash160(QBT_DOWNGRADE_SCRIPT), "output is the downgrade-output script");
+    is($tx->out->[0]->scripthash, QBT_DOWNGRADE_SCRIPTHASH, "output is the downgrade-output script");
     is($tx->out->[0]->data, $reclaim_id, "output carries the reclaim_id");
     is($tx->out->[0]->value, $V, "output value equals the freeze value");
     is(scalar @{$tx->in->[0]{siglist}}, 3, "freeze-IF siglist present");
