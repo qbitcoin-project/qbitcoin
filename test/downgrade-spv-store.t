@@ -10,7 +10,6 @@ use QBitcoin::Test::ORM qw(dbh);
 use QBitcoin::Const;
 use QBitcoin::Config;
 use QBitcoin::BlockchainParams;
-use QBitcoin::Crypto qw(hash160);
 use QBitcoin::Downgrade::Spv;
 
 $config->{regtest} = 1;
@@ -18,7 +17,7 @@ $config->{regtest} = 1;
 my $now = 2_000_000_000;
 my $old = $now - COINBASE_CONFIRM_TIME - 1000;
 my $dbh = dbh();
-my $dg_sh_hex = unpack("H*", hash160(QBT_DOWNGRADE_SCRIPT));
+my $dg_sh_hex = unpack("H*", QBT_DOWNGRADE_SCRIPTHASH);
 my $spk = "\x76\xa9\x14" . ("\xcc" x 20) . "\x88\xac";
 my $spk_hex = unpack("H*", $spk);
 
