@@ -97,6 +97,37 @@ is(QBitcoin::Coins->total(), $value, "Upgrade emission counted (full value incl 
 # static reward is zero during the upgrade phase in regtest
 is(QBitcoin::Block->static_reward($block0, $block1->time), 0, "No static reward during upgrade");
 
+is(QBitcoin::Coins->minted(), $value, "Minted equals the upgraded value");
+is(QBitcoin::Coins->burned(), 0, "Nothing burned yet");
+
+# Burn transaction (final step of a downgrade): one input, no outputs, zero fee.
+# Its whole input value leaves circulation: total decreases, minted stays.
+my $burn_value = 30000;
+my $burn_in = QBitcoin::TXO->new_txo({
+    value      => $burn_value,
+    scripthash => QBT_DOWNGRADE_SCRIPTHASH,
+    data       => "",
+    tx_in      => "\xee" x 32,
+    num        => 0,
+});
+my $burn = QBitcoin::Transaction->new({
+    in      => [ { txo => $burn_in, siglist => [] } ],
+    out     => [],
+    tx_type => TX_TYPE_BURN,
+});
+$burn->calculate_fee;
+is($burn->fee, 0, "Burn transaction fee is zero");
+$burn->hash = "\xbb" x 32;
+$burn->add_to_cache();
+$burn->confirm($block1, 1);
+is(QBitcoin::Coins->burned(), $burn_value, "Burned value counted on confirm");
+is(QBitcoin::Coins->minted(), $value, "Minted not changed by burn");
+is(QBitcoin::Coins->total(), $value - $burn_value, "Total is minted minus burned");
+
+$burn->unconfirm($block1);
+is(QBitcoin::Coins->burned(), 0, "Burned value removed on unconfirm");
+is(QBitcoin::Coins->total(), $value, "Total restored after burn unconfirm");
+
 # Unconfirm the best block: emission must roll back to the previous value
 $block1->unconfirm();
 is(QBitcoin::Block->blockchain_height, 0, "Back to genesis height");
