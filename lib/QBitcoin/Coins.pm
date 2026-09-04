@@ -2,18 +2,24 @@ package QBitcoin::Coins;
 use warnings;
 use strict;
 
-# Running total of the generated (emitted) coins for the best blockchain branch.
-# emission = sum(coinbase up_value) + sum(static block reward)
+# Running totals of the coins for the best blockchain branch.
+# minted (emission) = sum(coinbase up_value) + sum(static block reward)
+# burned            = sum(input value of TX_TYPE_BURN transactions)
+# total (in circulation) = minted - burned
 # Neither the dynamic block reward nor transaction fees are counted separately: they
 # recirculate already existing coins through the reward fund and do not create emission.
 # GENESIS_REWARD is not counted either: the genesis-reward coins are service coins for
 # the initial validation weight, their balance can never decrease (see
 # QBitcoin::Transaction::check_genesis_balance), so they never enter circulation.
+# A burn transaction (the final step of the trustless downgrade) has exactly one input,
+# no outputs and zero fee, so its whole input value leaves circulation; the downgrade
+# transaction itself only moves the value into the downgrade output and is not counted.
 #
-# The total is computed once on the node startup (the only place where we scan the
-# coinbase table) and then maintained incrementally on confirm/unconfirm of coinbase
-# and stake transactions, so getblockchaininfo does not run a heavy query on each call
-# and the value stays accurate for blocks which are still in memory (not yet stored).
+# The totals are computed once on the node startup (the only place where we scan the
+# coinbase and txo tables) and then maintained incrementally on confirm/unconfirm of
+# coinbase, stake and burn transactions, so getblockchaininfo does not run a heavy
+# query on each call and the values stay accurate for blocks which are still in memory
+# (not yet stored).
 
 use QBitcoin::Const;
 use QBitcoin::BlockchainParams;
@@ -27,6 +33,7 @@ use Bitcoin::Block;
 
 my $UPGRADE_TOTAL = 0; # sum of up_value of all coinbase transactions in the best branch
 my $STATIC_TOTAL  = 0; # sum of static block rewards in the best branch
+my $BURN_TOTAL    = 0; # sum of input values of burn transactions in the best branch
 my $INITIALIZED;
 
 # Compute the base totals from the database. On startup the best block always equals
@@ -36,22 +43,43 @@ sub init {
     return if $INITIALIZED;
     my ($sum) = dbh->selectrow_array("SELECT SUM(value) FROM `" . QBitcoin::Coinbase->TABLE . "` WHERE tx_out IS NOT NULL");
     $UPGRADE_TOTAL = ($sum // 0) + 0;
+    # A burn transaction spends its single input entirely (no outputs, zero fee),
+    # so the burned value is the value of the txo spent by a TX_TYPE_BURN transaction
+    my ($burned) = dbh->selectrow_array("SELECT SUM(t.value) FROM `" . QBitcoin::TXO->TABLE . "` t" .
+        " JOIN `" . QBitcoin::TXO->TRANSACTION_TABLE . "` x ON (x.id = t.tx_out) WHERE x.tx_type = ?",
+        undef, TX_TYPE_BURN);
+    $BURN_TOTAL = ($burned // 0) + 0;
     my $tip;
     if (defined(my $height = QBitcoin::Block->blockchain_height)) {
         $tip = QBitcoin::Block->best_block($height);
     }
     $STATIC_TOTAL = _static_total($tip);
     $INITIALIZED = 1;
-    Debugf("Coins accounting initialized: upgraded %lu, static %lu", $UPGRADE_TOTAL, $STATIC_TOTAL);
+    Debugf("Coins accounting initialized: upgraded %lu, static %lu, burned %lu", $UPGRADE_TOTAL, $STATIC_TOTAL, $BURN_TOTAL);
     return;
 }
 
-# Total emitted coins in satoshi (raw value, callers divide by DENOMINATOR if needed).
+# All values are in satoshi (raw value, callers divide by DENOMINATOR if needed).
 # The genesis reward is excluded: those coins can never be spent, only staked.
-sub total {
+
+# Total minted (emitted) coins: upgraded plus static block rewards.
+sub minted {
     my $class = shift;
     return 0 unless defined QBitcoin::Block->blockchain_height;
     return $UPGRADE_TOTAL + $STATIC_TOTAL;
+}
+
+# Total coins destroyed by burn transactions (downgraded back to BTC).
+sub burned {
+    my $class = shift;
+    return 0 unless defined QBitcoin::Block->blockchain_height;
+    return $BURN_TOTAL;
+}
+
+# Total coins in circulation: minted minus burned.
+sub total {
+    my $class = shift;
+    return $class->minted - $class->burned;
 }
 
 # Scripthashes holding the genesis reward: the outputs of the genesis block's
@@ -118,6 +146,8 @@ sub add_coinbase { my (undef, $value) = @_; $UPGRADE_TOTAL += $value if $INITIAL
 sub del_coinbase { my (undef, $value) = @_; $UPGRADE_TOTAL -= $value if $INITIALIZED }
 sub add_static   { my (undef, $value) = @_; $STATIC_TOTAL  += $value if $INITIALIZED }
 sub del_static   { my (undef, $value) = @_; $STATIC_TOTAL  -= $value if $INITIALIZED }
+sub add_burn     { my (undef, $value) = @_; $BURN_TOTAL    += $value if $INITIALIZED }
+sub del_burn     { my (undef, $value) = @_; $BURN_TOTAL    -= $value if $INITIALIZED }
 
 # Sum of static block rewards for the whole best branch up to the given tip.
 # Static reward is zero until the upgrade is finished, so this is 0 during the upgrade
