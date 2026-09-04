@@ -1094,6 +1094,8 @@ sub node_status {
         mempool_size         => @mempool + 0,
         mempool_bytes        => sum0(map { $_->size } @mempool) + 0,
         total_coins          => QBitcoin::Coins->total,
+        minted               => QBitcoin::Coins->minted,
+        burned               => QBitcoin::Coins->burned,
         btc_upgraded         => $best_block ? $best_block->upgraded + $best_block->downgraded : 0,
         btc_downgraded       => $best_block ? $best_block->downgraded : 0,
         btc_upgrade_addr     => QBT_LOCK_ADDR,

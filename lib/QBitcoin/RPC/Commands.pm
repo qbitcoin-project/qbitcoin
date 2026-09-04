@@ -120,7 +120,9 @@ Result:
   "weight" : n,                           (numeric) the current weight
   "bestblocktime" : n,                    (numeric) time for the current best block
   "initialblockdownload" : true|false,    (boolean) (debug information) estimate of whether this node is in Initial Block Download mode
-  "total_coins" : n,                      (numeric) total number of generated (upgraded) coins
+  "total_coins" : n,                      (numeric) total number of coins in circulation (minted minus burned)
+  "minted_coins" : n,                     (numeric) total number of minted coins (upgraded plus static block rewards)
+  "burned_coins" : n,                     (numeric) total number of coins burned (downgraded back to bitcoins)
   "btc_headers" : n,                      (numeric) number of processed btc block headers
   "btc_scanned" : n,                      (numeric) number of scanned btc blocks
   "btc_synced" : true|false,              (boolean) is btc blockchain fully synced or is in initial block download mode
@@ -138,7 +140,9 @@ sub cmd_getblockchaininfo {
     if (defined(my $height = QBitcoin::Block->blockchain_height)) {
         $best_block = QBitcoin::Block->best_block($height);
     }
-    my $total_coins = QBitcoin::Coins->total();
+    my $total_coins  = QBitcoin::Coins->total();
+    my $minted_coins = QBitcoin::Coins->minted();
+    my $burned_coins = QBitcoin::Coins->burned();
     my $response = {
         chain                => $config->{regtest} ? "regtest" : $config->{testnet} ? "testnet" : "main",
         blocks               => $best_block ? $best_block->height+0   : -1,
@@ -146,7 +150,9 @@ sub cmd_getblockchaininfo {
         weight               => $best_block ? $best_block->weight+0   : -1,
         bestblocktime        => $best_block ? $best_block->time       : -1,
         initialblockdownload => blockchain_synced() ? FALSE : TRUE,
-        total_coins          => $total_coins ? $total_coins / DENOMINATOR : 0,
+        total_coins          => $total_coins  ? $total_coins  / DENOMINATOR : 0,
+        minted_coins         => $minted_coins ? $minted_coins / DENOMINATOR : 0,
+        burned_coins         => $burned_coins ? $burned_coins / DENOMINATOR : 0,
         # size_on_disk         => # TODO
     };
     $response->{headers} = $response->{blocks}; # satisfy explorers
