@@ -1885,6 +1885,10 @@ sub confirm {
             QBitcoin::Coins->add_static(QBitcoin::Block->static_reward($block->prev_block, $block->time));
         }
     }
+    elsif ($self->is_burn) {
+        # burn has no outputs and zero fee: its whole input value leaves circulation
+        QBitcoin::Coins->add_burn(sum0 map { $_->{txo}->value } @{$self->in});
+    }
     foreach my $in (@{$self->in}) {
         my $txo = $in->{txo};
         $txo->tx_out = $self->hash;
@@ -1934,6 +1938,9 @@ sub unconfirm {
         if (-$self->fee) {
             QBitcoin::Coins->del_static(QBitcoin::Block->static_reward($block->prev_block, $block->time));
         }
+    }
+    elsif ($self->is_burn) {
+        QBitcoin::Coins->del_burn(sum0 map { $_->{txo}->value } @{$self->in});
     }
     # dependent transactions with seq limits should not be confirmed
     if (exists $TX_SEQ_DEPENDS{$self->hash}) {
