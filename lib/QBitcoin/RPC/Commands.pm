@@ -124,6 +124,8 @@ Result:
   "btc_headers" : n,                      (numeric) number of processed btc block headers
   "btc_scanned" : n,                      (numeric) number of scanned btc blocks
   "btc_synced" : true|false,              (boolean) is btc blockchain fully synced or is in initial block download mode
+  "btc_upgraded" : n,                     (numeric) total number of upgraded bitcoins
+  "btc_downgraded": n,                    (numeric) total number of released bitcoins
 }
 
 Examples:
@@ -162,6 +164,8 @@ sub cmd_getblockchaininfo {
         $response->{btc_synced}  = btc_synced() ? TRUE : FALSE;
         $response->{btc_headers} = $btc_block   ? $btc_block->height+0   : 0;
         $response->{btc_scanned} = $btc_scanned ? $btc_scanned->height+0 : 0;
+        $response->{btc_upgraded} = $best_block ? ($best_block->upgraded + $best_block->downgraded) / DENOMINATOR : 0;
+        $response->{btc_downgraded} = $best_block ? $best_block->downgraded / DENOMINATOR : 0;
     }
     return $self->response_ok($response);
 }
