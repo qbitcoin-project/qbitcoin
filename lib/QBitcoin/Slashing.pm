@@ -9,8 +9,9 @@ use strict;
 # is not signed: any node that observes the two conflicting stakes can build it, and
 # every node builds the byte-identical transaction from the same evidence.
 #
-# Evidence layout (placed right after tx_type in the transaction): two proofs ordered
-# by their block_sign_data ascending, then the prevouts of each of them:
+# Evidence layout (placed right after tx_type in the transaction, like a downgrade
+# payload), two proofs ordered by their block_sign_data hash ascending, then
+# the prevouts of each of them:
 #
 #   proof   := prev_hash(32) . pack("N", timeslot) . digest(32) . varstr(stake_tx_bytes)
 #   prevouts:= pack("Q<", value) . pack("C", length(scripthash)) for each input of the
