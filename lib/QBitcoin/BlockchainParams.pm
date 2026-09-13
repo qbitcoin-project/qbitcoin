@@ -17,7 +17,7 @@ sub _stop_utxo_set {
 }
 
 use constant MAINNET => {
-    GENESIS_HASH       => pack("H*", ""),
+    GENESIS_HASH       => pack("H*", "fbf7ba9e3b77f48ae2baa38533a85a4efd9c7c836bb1d1150e64f6f8d74daa3d"),
     # BTC pubkeys of the three federation operators behind the deposit/pool address
     # (2-of-3, see QBT_LOCK_WITNESS_SCRIPT / QBT_LOCK_SCRIPT below); any order here,
     # the witnessScript sorts them (BIP67). Address: 3QBTC3wxgSPUbKLqjZjh6aGwM3yKHWhaLU
@@ -103,7 +103,7 @@ use constant MAINNET => {
     PKH_MAGIC          => "\x27\x10", # base58 pubkeyhash strings start with "6n" (hash256) or "2C" (hash160)
     PRIVATE_KEY_RE     => qr/^(?:[5KL][1-9A-HJ-NP-Za-km-z]{50,51}|2[JK][1-9A-HJ-NP-Za-km-z]{1755})$/,
     ADDRESS_RE         => qr/^(?:bq[1-9A-HJ-NP-Za-km-z]{33}|3u[H-K][1-9A-HJ-NP-Za-km-z]{49})$/,
-    GENESIS_TIME       => 1635933000, # must be divided by BLOCK_INTERVAL*FORCE_BLOCKS
+    GENESIS_TIME       => 1789300000, # 2026-09-13 09:00:00 UTC
     PORT               => 9555,
     RPC_PORT           => 9556,
     REST_PORT          => 9557, # Esplora REST API, https://github.com/blockstream/esplora/blob/master/API.md
@@ -307,6 +307,7 @@ use constant REGTEST => {
             "a12730844e086169e6b33f7875595641b5acc9e7046d4f1b8cfc3ef6ec400b07bad724f501eb83ba8935b39c92" .
             "6d5d45aa4d497eb1dabe0a6cc910a4f2024bd7abc800411f19b82ea082d99eb30d1f6322b47db9dd09a6"),
     ],
+    GENESIS_TIME       => 1635933000, # must be divided by BLOCK_INTERVAL*FORCE_BLOCKS
     PORT               => 29555,
     RPC_PORT           => 29556,
     REST_PORT          => 29557,
