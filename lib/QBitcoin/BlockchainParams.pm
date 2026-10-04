@@ -115,7 +115,8 @@ use constant MAINNET => {
     BTC_P2PKH_VER      => 0x00,
     BTC_P2SH_VER       => 0x05,
     BTC_BECH32_HRP     => "bc",
-    UPGRADE_FINISHED   => 0,
+    UPGRADE_FINISHED   => 0, # once the upgrade is finished: timeslot of the first block with the static reward
+                             # (the base of the reward halving, see QBitcoin::Block::static_start), not just 1
     UPGRADE_STOP_UTXO  => _stop_utxo_set(
         # "txid:vout"
         "6c3efe515b5017c5020e1f20a2c5924fa09e6648cf3eb3858771d2cad7edec45:0", # 0.1 BTC to PK "\x02"x33
@@ -223,7 +224,8 @@ use constant TESTNET => {
     BTC_P2PKH_VER      => 0x6F,
     BTC_P2SH_VER       => 0xC4,
     BTC_BECH32_HRP     => "tb",
-    UPGRADE_FINISHED   => 0,
+    UPGRADE_FINISHED   => 0, # once the upgrade is finished: timeslot of the first block with the static reward
+                             # (the base of the reward halving, see QBitcoin::Block::static_start), not just 1
     UPGRADE_STOP_UTXO  => _stop_utxo_set(),
     CHECKPOINTS        => {
         3000 => pack("H*", "20e0dfa02b4ab01b44bda94112f1cbeaabe3c1bf51a568263a39a70a47054d4e"),
@@ -315,7 +317,8 @@ use constant REGTEST => {
     BTC_P2PKH_VER      => 0x6F,
     BTC_P2SH_VER       => 0xC4,
     BTC_BECH32_HRP     => "bcrt",
-    UPGRADE_FINISHED   => 0,
+    UPGRADE_FINISHED   => 0, # once the upgrade is finished: timeslot of the first block with the static reward
+                             # (the base of the reward halving, see QBitcoin::Block::static_start), not just 1
     UPGRADE_STOP_UTXO  => _stop_utxo_set(
         # block 9 coinbase, the first ever spent satoshi's coins; arbitrary value for regtest
         "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0",

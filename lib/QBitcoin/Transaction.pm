@@ -1939,6 +1939,8 @@ sub confirm {
         if (-$self->fee) {
             QBitcoin::Coins->add_static(QBitcoin::Block->static_reward($block->prev_block, $block->time));
         }
+        # the first block with the static reward defines the base of the reward halving
+        QBitcoin::Block->set_static_start($block);
     }
     elsif ($self->is_burn) {
         # burn has no outputs and zero fee: its whole input value leaves circulation
@@ -1997,6 +1999,7 @@ sub unconfirm {
         if (-$self->fee) {
             QBitcoin::Coins->del_static(QBitcoin::Block->static_reward($block->prev_block, $block->time));
         }
+        QBitcoin::Block->unset_static_start($block);
     }
     elsif ($self->is_burn) {
         QBitcoin::Coins->del_burn(sum0 map { $_->{txo}->value } @{$self->in});
