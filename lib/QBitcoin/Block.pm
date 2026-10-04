@@ -264,14 +264,116 @@ sub reward {
     }
 }
 
+# Is the static block reward accrued for a block in $timeslot built on $prev_block?
+# True once the btc->qbt conversion is stopped in the branch: by the converted value,
+# by the UPGRADE_STOP marker (both per branch) or by the btc chain height (global).
+sub static_reward_started {
+    my $class = shift;
+    my ($prev_block, $timeslot) = @_;
+    return 1 if !UPGRADE_POW;
+    return 1 if Bitcoin::Block->upgrade_stopped($timeslot);
+    return ($prev_block->upgraded // 0) >= UPGRADE_MAX_VALUE || $prev_block->upgrade_stopped ? 1 : 0;
+}
+
+# Timeslot of the first block with the static reward in the best branch: the base of
+# the reward halving epochs. It is a single value for the branch, not a block attribute:
+# the halving matters only REWARD_HALVING blocks after the stop, when no reorg can cross
+# the stop point anymore, so a few slots of difference between competing branches around
+# the stop are harmless (both are in epoch 0). Set when the first such block is confirmed
+# (reset when it is unconfirmed), or derived from the stored best branch on demand after
+# a restart. After the upgrade is finished the value is hardcoded as UPGRADE_FINISHED, as
+# a node started without btc blocks cannot derive the btc-height stop from the database.
+my $STATIC_START;        # timeslot
+my $STATIC_START_HEIGHT; # height of the block which defined it (undef for UPGRADE_FINISHED)
+
+sub static_start {
+    my $class = shift;
+    return $STATIC_START if defined $STATIC_START;
+    if (UPGRADE_FINISHED) {
+        return $STATIC_START = UPGRADE_FINISHED;
+    }
+    # Derive from the stored best branch (the database keeps only the best branch).
+    # The stored tip is queried, not taken from max_db_height: that counter is not
+    # maintained in the standalone revalidation of the stored blocks.
+    my ($tip) = $class->find(-sortby => 'height DESC', -limit => 1)
+        or return undef;
+    return undef if $tip->height < 1;
+    my $height = $class->first_static_height($tip)
+        // return undef;
+    my ($block) = $height == $tip->height ? $tip : $class->find(height => $height)
+        or return undef;
+    $STATIC_START_HEIGHT = $height;
+    return $STATIC_START = timeslot($block->time);
+}
+
+# Called when a block (its stake transaction) is confirmed in the best branch
+sub set_static_start {
+    my $class = shift;
+    my ($block) = @_;
+    return if defined $STATIC_START || UPGRADE_FINISHED;
+    my $prev_block = $block->prev_block
+        or return;
+    my $timeslot = timeslot($block->time);
+    return unless $class->static_reward_started($prev_block, $timeslot);
+    $STATIC_START_HEIGHT = $block->height;
+    $STATIC_START = $timeslot;
+    Infof("Static block reward started at block %u, timeslot %u", $block->height, $timeslot);
+}
+
+# Called when a block is unconfirmed (removed from the best branch)
+sub unset_static_start {
+    my $class = shift;
+    my ($block) = @_;
+    return unless defined $STATIC_START_HEIGHT && $block->height == $STATIC_START_HEIGHT;
+    $STATIC_START = undef;
+    $STATIC_START_HEIGHT = undef;
+}
+
+# The lowest height at which the static reward becomes non-zero in the stored best
+# branch, or undef if the upgrade is not finished even at the $tip. Binary search relies
+# on the condition being monotonic by height.
+sub first_static_height {
+    my $class = shift;
+    my ($tip) = @_;
+    return undef unless _static_started_stored($tip);
+    my $lo = 1;
+    my $hi = $tip->height;
+    while ($lo < $hi) {
+        my $mid = int(($lo + $hi) / 2);
+        my ($block) = $class->find(height => $mid);
+        if ($block && _static_started_stored($block)) {
+            $hi = $mid;
+        }
+        else {
+            $lo = $mid + 1;
+        }
+    }
+    return $lo;
+}
+
+# static_reward_started() for a stored block, with its previous block loaded from the database
+sub _static_started_stored {
+    my ($block) = @_;
+    return 1 if !UPGRADE_POW;
+    my $timeslot = timeslot($block->time);
+    return 1 if Bitcoin::Block->upgrade_stopped($timeslot);
+    return 0 if $block->height < 1;
+    my ($prev) = QBitcoin::Block->find(height => $block->height - 1)
+        or return 0;
+    return QBitcoin::Block->static_reward_started($prev, $timeslot);
+}
+
 sub static_reward {
     my $class = shift;
     my ($prev_block, $time) = @_;
     my $static_reward = 0;
     if ($prev_block) {
         my $timeslot = timeslot($time);
-        if (!UPGRADE_POW || $prev_block->upgraded >= UPGRADE_MAX_VALUE || $prev_block->upgrade_stopped || Bitcoin::Block->upgrade_stopped($timeslot)) {
-            $static_reward = int(STATIC_REWARD / 2**int(($timeslot - GENESIS_TIME) / BLOCK_INTERVAL / REWARD_HALVING));
+        if ($class->static_reward_started($prev_block, $timeslot)) {
+            # Halving epochs are counted from the first block with the static reward;
+            # if it is not confirmed yet, this is that block (epoch 0)
+            my $start = $class->static_start // $timeslot;
+            $static_reward = int(STATIC_REWARD / 2**int(($timeslot - $start) / BLOCK_INTERVAL / REWARD_HALVING));
             $static_reward *= ($timeslot - timeslot($prev_block->time)) / BLOCK_INTERVAL;
         }
     }
