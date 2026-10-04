@@ -29,7 +29,6 @@ use QBitcoin::ORM qw(dbh);
 use QBitcoin::Coinbase;
 use QBitcoin::TXO;
 use QBitcoin::RedeemScript;
-use Bitcoin::Block;
 
 my $UPGRADE_TOTAL = 0; # sum of up_value of all coinbase transactions in the best branch
 my $STATIC_TOTAL  = 0; # sum of static block rewards in the best branch
@@ -151,60 +150,32 @@ sub del_burn     { my (undef, $value) = @_; $BURN_TOTAL    -= $value if $INITIAL
 
 # Sum of static block rewards for the whole best branch up to the given tip.
 # Static reward is zero until the upgrade is finished, so this is 0 during the upgrade
-# phase. After the upgrade the per-block reward depends only on the block height
-# (halving), so the sum has a closed form over the halving epochs.
-# NB: this base ignores empty blocks (which pay no reward) and so may slightly
-# over-count if the node is restarted long after the upgrade has finished; the forward
-# accounting via confirm/unconfirm is exact.
+# phase. After the upgrade the per-block reward depends only on the halving epoch, so
+# the sum has a closed form over the epochs.
+# NB: this is an approximation: the consensus halving is by timeslots since the first
+# block with the static reward (QBitcoin::Block::static_start), here the epochs are
+# counted by heights since that block, and empty blocks (which pay no reward) are
+# ignored. So it may slightly over-count if the node is restarted long after the
+# upgrade has finished; the forward accounting via confirm/unconfirm is exact.
 sub _static_total {
     my ($tip) = @_;
     return 0 unless $tip;
-    my $h_end = _first_static_height($tip);
-    return 0 unless defined $h_end;
-    return _halving_sum($h_end, $tip->height);
+    my $h_start = QBitcoin::Block->first_static_height($tip);
+    return 0 unless defined $h_start;
+    return _halving_sum($h_start, $tip->height);
 }
 
-# The upgrade is finished for the given block (so its static reward is non-zero).
-# This condition is monotonic by height.
-sub _upgrade_ended {
-    my ($block) = @_;
-    return 1 if !UPGRADE_POW;
-    return 1 if Bitcoin::Block->upgrade_stopped(timeslot($block->time));
-    return 0 if $block->height < 1;
-    my ($prev) = QBitcoin::Block->find(height => $block->height - 1);
-    return $prev && (($prev->upgraded // 0) >= UPGRADE_MAX_VALUE || $prev->upgrade_stopped) ? 1 : 0;
-}
-
-# The lowest height at which the static reward becomes non-zero, or undef if the
-# upgrade is not finished even at the tip. Binary search relies on monotonicity.
-sub _first_static_height {
-    my ($tip) = @_;
-    return undef unless _upgrade_ended($tip);
-    my $lo = 1;
-    my $hi = $tip->height;
-    while ($lo < $hi) {
-        my $mid = int(($lo + $hi) / 2);
-        my ($block) = QBitcoin::Block->find(height => $mid);
-        if ($block && _upgrade_ended($block)) {
-            $hi = $mid;
-        }
-        else {
-            $lo = $mid + 1;
-        }
-    }
-    return $lo;
-}
-
-# Sum of int(STATIC_REWARD / 2**int((h-1)/REWARD_HALVING)) for h in [$from .. $to].
-# The reward is constant within a halving epoch, so iterate epoch by epoch.
+# Sum of int(STATIC_REWARD / 2**int((h-$from)/REWARD_HALVING)) for h in [$from .. $to],
+# $from is the first block with the static reward. The reward is constant within
+# a halving epoch, so iterate epoch by epoch.
 sub _halving_sum {
     my ($from, $to) = @_;
     my $total = 0;
     for (my $h = $from; $h <= $to; ) {
-        my $epoch  = int(($h - 1) / REWARD_HALVING);
+        my $epoch  = int(($h - $from) / REWARD_HALVING);
         my $reward = int(STATIC_REWARD / 2**$epoch);
         last if $reward <= 0;
-        my $seg_end = ($epoch + 1) * REWARD_HALVING; # last height of this epoch
+        my $seg_end = $from + ($epoch + 1) * REWARD_HALVING - 1; # last height of this epoch
         $seg_end = $to if $seg_end > $to;
         $total += $reward * ($seg_end - $h + 1);
         $h = $seg_end + 1;

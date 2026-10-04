@@ -140,7 +140,9 @@ my $upgrade_stopped_block;
 sub upgrade_stopped {
     my $class = shift;
     my ($timeslot) = @_;
-    return 1 if UPGRADE_FINISHED;
+    # UPGRADE_FINISHED is the timeslot of the first block with the static reward
+    # (whatever the stop condition was), so the blocks before it are not stopped
+    return $timeslot >= UPGRADE_FINISHED ? 1 : 0 if UPGRADE_FINISHED;
     $upgrade_stopped_block //= __PACKAGE__->find(height => UPGRADE_MAX_BLOCKS + COINBASE_CONFIRM_BLOCKS) // 0;
     return 0 unless $upgrade_stopped_block;
     return $timeslot >= $upgrade_stopped_block->time + COINBASE_CONFIRM_TIME;
