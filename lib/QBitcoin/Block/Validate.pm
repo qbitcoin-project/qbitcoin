@@ -181,6 +181,9 @@ sub validate {
             if ($upgrade_stopped) {
                 return "Downgrade transaction " . $transaction->hash_str . " rejected: upgrade stopped";
             }
+            if ($upgraded >= UPGRADE_MAX_VALUE) {
+                return "Downgrade transaction " . $transaction->hash_str . " rejected: upgrade threshold reached";
+            }
             $downgrade_pinned += sum0(map { $_->value } @{$transaction->out});
             $was_downgrade = $transaction->hash_str;
         }
