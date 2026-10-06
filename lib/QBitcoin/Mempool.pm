@@ -86,7 +86,7 @@ sub choose_for_block {
                     $tx->hash_str, $coinbase->tx_out_str);
                 next;
             }
-            my $upgrade_level = level_by_total($upgraded_total += $coinbase->value_btc);
+            my $upgrade_level = level_by_total($upgraded_total + $coinbase->value_btc);
             if ($tx->upgrade_level != $upgrade_level) {
                 # Re-create coinbase transaction with new upgrade level
                 my $new_tx = QBitcoin::Transaction->new_coinbase($coinbase, $upgrade_level);
@@ -99,6 +99,7 @@ sub choose_for_block {
             # field and JSON encoders would then render it as a string
             my $key = $coinbase->btc_tx_hash . pack("S", $coinbase->btc_out_num);
             next if exists $spent{$key}; # spent in previous mempool transaction
+            $upgraded_total += $coinbase->value_btc;
             $spent{$key} = 1;
         }
         elsif ($tx->is_upgrade_stop) {
@@ -107,7 +108,7 @@ sub choose_for_block {
                 || ($stop->tx_out && $stop->tx_out ne $tx->hash);
             $upgrade_stopped = 1;
         }
-        elsif ($tx->is_downgrade && $upgrade_stopped) {
+        elsif ($tx->is_downgrade && ($upgraded_total >= UPGRADE_MAX_VALUE || $upgrade_stopped)) {
             # New downgrades stop together with upgrades
             next;
         }
