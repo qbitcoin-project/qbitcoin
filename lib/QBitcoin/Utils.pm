@@ -1061,7 +1061,10 @@ sub create_txo {
                 $token_data .= pack("C", $attr) . $token_attr[$attr];
             }
         }
-        $txo[0]->{data} = $token_data;
+        if (defined($token_data)) {
+            return undef if defined($txo[0]->{data});
+            $txo[0]->{data} = $token_data;
+        }
     }
     return ([ map { QBitcoin::TXO->new_txo($_) } @txo ], $token_id);
 }
