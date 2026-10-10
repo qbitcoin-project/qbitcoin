@@ -232,10 +232,12 @@ sub stake_split {
 # UTXOs carrying that tag must sum to exactly the requested amount. The spec is
 # cleared as soon as this holds; in the unlikely case a deep reorg unwinds the split
 # block after that, re-issue the splitstake command.
+# Only outputs confirmed in the prev_block chain count (see make_stake_tx): a split
+# block above $prev_height is not part of the branch being built.
 sub stake_split_done {
-    my ($split, $genesis) = @_;
+    my ($split, $genesis, $prev_height) = @_;
     my %sum;
-    foreach my $txo (grep { $genesis->{$_->scripthash} && txo_confirmed($_) } QBitcoin::TXO->staked_utxo()) {
+    foreach my $txo (grep { $genesis->{$_->scripthash} && txo_confirmed($_, $prev_height) } QBitcoin::TXO->staked_utxo()) {
         $sum{$txo->data // ""} += $txo->value;
     }
     foreach my $tag (keys %$split) {
@@ -433,7 +435,7 @@ sub make_stake_tx {
         @genesis_txo = grep { $genesis->{$_->scripthash} && ($_->data // "") eq $my_tag } @my_txo;
         @my_txo     = grep { !$genesis->{$_->scripthash} } @my_txo;
         if (my $split = QBitcoin::Generate->stake_split) {
-            if (stake_split_done($split, $genesis)) {
+            if (stake_split_done($split, $genesis, $prev_height)) {
                 Infof("Stake split completed, clear the pending spec");
                 QBitcoin::Generate->stake_split(undef);
             }
