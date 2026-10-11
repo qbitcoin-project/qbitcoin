@@ -42,7 +42,7 @@ $transaction_module->mock('validate_coinbase', sub { return 0 });
     use Role::Tiny::With;
     with 'QBitcoin::RPC::Validate';
     with 'QBitcoin::RPC::Commands';
-    mk_accessors(qw(cmd args validate_message _rpc_result _rpc_error));
+    mk_accessors(qw(cmd args _rpc_result _rpc_error));
     sub new { bless {}, shift }
     sub response_ok    { $_[0]->_rpc_result($_[1]); 0 }
     sub response_error { $_[0]->_rpc_error($_[2] // $_[1]); -1 }
