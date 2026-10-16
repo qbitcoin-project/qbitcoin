@@ -860,7 +860,7 @@ sub tx_obj {
         txid          => unpack("H*", $tx->hash),
         fee           => $tx->fee,
         size          => $tx->size,
-        value         => sum0(map { $_->value } @{$tx->out}) + $tx->fee,
+        value         => $tx->is_coinbase ? $tx->coins_created : sum0(map { $_->{txo}->value } @{$tx->in}),
         is_coinbase   => $tx->is_coinbase ? TRUE : FALSE,
         received_time => $tx->received_time // undef,
         tx_type       => $tx->type_as_text,
