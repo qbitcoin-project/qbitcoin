@@ -23,6 +23,13 @@ export const brand: BrandConfig = {
     addressTestnetRe: /^(?:btq[1-9A-HJ-NP-Za-km-z]{33}|3ua[234][1-9A-HJ-NP-Za-km-z]{49})$/,
     logoSize: { width: 48, height: 48 },
     accent: { light: '#c2560d', dark: '#fd7007' },
+    powChain: {
+        label: 'BTC',
+        explorerUrl: {
+            main: 'https://mempool.space/',
+            testnet: 'https://mempool.space/testnet4/',
+        },
+    },
 };
 
 export { Logo };
