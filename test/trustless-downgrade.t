@@ -194,6 +194,7 @@ sub new {
 }
 sub tx_type   { $_[0]->{tx_type}   }
 sub sign_data { $_[0]->{sign_data} }
+sub sign_hash { QBitcoin::Crypto::hash256($_[0]->{sign_data}) }
 sub in        { $_[0]->{in}        }
 
 1;
