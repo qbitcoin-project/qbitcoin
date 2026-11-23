@@ -85,7 +85,7 @@ CREATE TABLE `downgrade` (
   btc_txid     binary(32)      NOT NULL,  -- committed BTC funding txid (internal byte order)
   btc_vout     int unsigned    NOT NULL,
   btc_value    bigint unsigned NOT NULL,
-  scriptpubkey varbinary(64)   NOT NULL,  -- committed BTC destination scriptPubKey
+  scriptpubkey blob            NOT NULL,  -- committed BTC destination scriptPubKey, of any length the freeze output data carries
   FOREIGN KEY (tx_id) REFERENCES `transaction` (id) ON DELETE CASCADE
 );
 
