@@ -114,6 +114,18 @@ ok(!defined QBitcoin::Transaction->deserialize(Bitcoin::Serialized->new(pack("c"
     is($row->btc_value,    99,    "stored commitment btc_value round-trips");
     is($row->scriptpubkey, $spk,  "stored commitment scriptpubkey round-trips");
 
+    # The consensus compares the committed script with the freeze output data and does not limit it,
+    # so the longest script the data of an output may carry is stored as well
+    my $long_spk = join("", map { chr($_ % 251) } 1 .. MAX_TXO_DATA_SIZE - 32);
+    $dbh->do("INSERT INTO `transaction` (id,hash,block_height,block_pos,tx_type,size,fee) VALUES (2,X'bb',0,1,?,10,0)",
+        undef, TX_TYPE_DOWNGRADE) or die $dbh->errstr;
+    QBitcoin::Downgrade::Commitment->create({
+        tx_id => 2, freeze_txid => $freeze_txid, freeze_vout => $freeze_vout + 1,
+        btc_txid => $txid, btc_vout => 0, btc_value => 99, scriptpubkey => $long_spk,
+    });
+    my ($long_row) = QBitcoin::Downgrade::Commitment->find(tx_id => 2);
+    ok($long_row && $long_row->scriptpubkey eq $long_spk, "stored commitment with the longest scriptpubkey round-trips");
+
     $dbh->do("DELETE FROM `transaction` WHERE id = 1") or die $dbh->errstr;
     my ($gone) = QBitcoin::Downgrade::Commitment->fetch(tx_id => 1);
     ok(!$gone, "commitment removed by ON DELETE CASCADE");
